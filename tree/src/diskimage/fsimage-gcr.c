@@ -40,6 +40,11 @@
 #include "types.h"
 #include "util.h"
 
+#ifdef WEB64_HOST_NATIVE
+#define X64_MEMORY_FILE_STDIO
+#include "arch/headless/x64-memory-file.h"
+#endif
+
 
 static log_t fsimage_gcr_log = LOG_DEFAULT;
 static const uint8_t gcr_image_header_expected_1541[] =

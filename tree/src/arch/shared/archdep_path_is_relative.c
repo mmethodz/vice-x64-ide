@@ -37,6 +37,10 @@
 
 #include "archdep_path_is_relative.h"
 
+#ifdef WEB64_HOST_NATIVE
+#include "arch/headless/x64-memory-file.h"
+#endif
+
 
 /** \brief  Determine if \a path is a relative path
  *
@@ -46,6 +50,9 @@
  */
 int archdep_path_is_relative(const char *path)
 {
+#ifdef WEB64_HOST_NATIVE
+    if (x64_memory_file_reserved(path)) return 0;
+#endif
     if (path == NULL || *path == '\0') {
         return 1;   /* yup, */
     }

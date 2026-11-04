@@ -42,6 +42,11 @@
 #include "util.h"
 #include "x64.h"
 
+#ifdef WEB64_HOST_NATIVE
+#define X64_MEMORY_FILE_STDIO
+#include "arch/headless/x64-memory-file.h"
+#endif
+
 static log_t fsimage_dxx_log = LOG_DEFAULT;
 
 int fsimage_dxx_write_half_track(disk_image_t *image, unsigned int half_track,

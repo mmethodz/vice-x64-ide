@@ -1,0 +1,39 @@
+--- a/src/arch/shared/archdep_tick.c
++++ b/src/arch/shared/archdep_tick.c
+@@ -67,6 +67,17 @@
+ #ifdef WINDOWS_COMPILE
+     QueryPerformanceFrequency(&timer_frequency);
+ 
++#ifdef WEB64_HOST_NATIVE
++    /* The headless helper never raises the timer resolution (only the GTK UI
++     * calls timeBeginPeriod), so an ordinary waitable timer wakes on the
++     * default 15.6 ms tick and the core runs in bursts: frames 3, 16 or 31 ms
++     * apart instead of 20. A high-resolution timer keeps each vsync sleep to
++     * the time asked for, whatever the process timer resolution. */
++    wait_timer = CreateWaitableTimerExW(NULL, NULL,
++                                        CREATE_WAITABLE_TIMER_MANUAL_RESET | CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
++                                        TIMER_ALL_ACCESS);
++    if (wait_timer == NULL)
++#endif
+     wait_timer = CreateWaitableTimer(NULL, TRUE, NULL);
+ 
+ #elif defined(MACOS_COMPILE)
+--- a/src/vsync.c
++++ b/src/vsync.c
+@@ -489,7 +489,16 @@
+ 
+ void vsync_do_end_of_line(void)
+ {
++#ifdef WEB64_HOST_NATIVE
++    /* The native helper's sound device is not a timing source, so this sync
++     * paces the core. At 2 ms of host time between syncs the core emulates
++     * about 13 ms per burst and then sleeps; frames came 12 and 28 ms apart
++     * and audio reached the player in 13 ms clumps. Every 0.5 ms keeps the
++     * bursts to about 3 ms. Host timing only: guest bytes are unchanged. */
++    const int microseconds_between_sync = 500;
++#else
+     const int microseconds_between_sync = 2 * 1000;
++#endif
+ 
+     tick_t tick_between_sync = tick_per_second() / (1000000 / microseconds_between_sync);
+     tick_t tick_now;

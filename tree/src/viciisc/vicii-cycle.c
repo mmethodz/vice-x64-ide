@@ -47,7 +47,7 @@
 #include "vicii-resources.h"
 #include "vicii.h"
 #include "viciitypes.h"
-#if defined(VICE_WEB) && defined(__EMSCRIPTEN__)
+#if defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE))
 #include "../arch/headless/web64-frame-step.h"
 #endif
 
@@ -206,7 +206,7 @@ static inline void vicii_cycle_start_of_frame(void)
 {
     vicii.start_of_frame = 0;
     vicii.raster_line = 0;
-#if defined(VICE_WEB) && defined(__EMSCRIPTEN__)
+#if defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE))
     vice_web_frame_step_vic_start();
 #endif
     vicii.refresh_counter = 0xff;
@@ -630,7 +630,7 @@ int vicii_cycle_reu(void)
     return vicii_cycle() && !check;
 }
 
-#if defined(VICE_WEB) && defined(__EMSCRIPTEN__) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
+#if defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
 void (*vicii_web_cpu_stall_observer)(CLOCK clock, unsigned int cause) = NULL;
 #endif
 
@@ -639,7 +639,7 @@ void vicii_steal_cycles(void)
 {
     int ba_low;
 
-#if defined(VICE_WEB) && defined(__EMSCRIPTEN__) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
+#if defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
     /* Disabled path branches once per steal group, not on every VIC cycle.
      * The callback is native and bounded. Its ticket check safely ignores a
      * continuation if a host command cancelled capture during a suspended CPU. */

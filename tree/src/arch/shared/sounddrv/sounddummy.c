@@ -205,6 +205,198 @@ int sound_init_web_device(void)
 {
     return sound_register_device(&web_audio_device);
 }
+#elif defined(WEB64_HOST_NATIVE)
+/* Host-owned transport only. VICE still generates the original interleaved
+ * s16 stream. No browser pointer-as-int exports or concurrent consumer is
+ * enabled here; the native command service drains on this same core thread.
+ */
+#include "x64-audio-native.h"
+#include "arch/headless/x64-native-delivery.h"
+
+#define X64_AUDIO_NATIVE_BUFFER_SAMPLES ((SOUND_SAMPLE_RATE * SOUND_OUTPUT_CHANNELS_MAX) / 8)
+
+static int16_t x64_audio_buffer[X64_AUDIO_NATIVE_BUFFER_SAMPLES];
+static size_t x64_audio_read_pos;
+static size_t x64_audio_write_pos;
+static size_t x64_audio_queued;
+static uint64_t x64_audio_dropped_samples;
+static uint32_t x64_audio_rate = SOUND_SAMPLE_RATE;
+static uint32_t x64_audio_channel_count = SOUND_OUTPUT_CHANNELS_MAX;
+static int x64_audio_enabled;
+
+void x64_audio_native_reset(void)
+{
+    x64_native_delivery_audio_reset();
+    x64_audio_read_pos = 0;
+    x64_audio_write_pos = 0;
+    x64_audio_queued = 0;
+    x64_audio_dropped_samples = 0;
+    memset(x64_audio_buffer, 0, sizeof(x64_audio_buffer));
+}
+
+static int x64_audio_init(const char *param, int *speed, int *fragsize, int *fragnr, int *channels)
+{
+    (void)param;
+    (void)fragsize;
+    (void)fragnr;
+
+    x64_audio_rate = speed != NULL && *speed > 0 ? (uint32_t)*speed : SOUND_SAMPLE_RATE;
+    x64_audio_channel_count = channels != NULL && *channels > 0
+        ? (uint32_t)*channels : SOUND_OUTPUT_CHANNELS_MAX;
+    if (x64_audio_channel_count > SOUND_OUTPUT_CHANNELS_MAX) {
+        x64_audio_channel_count = SOUND_OUTPUT_CHANNELS_MAX;
+        if (channels != NULL) {
+            *channels = (int)x64_audio_channel_count;
+        }
+    }
+    x64_audio_native_reset();
+    return 0;
+}
+
+static int x64_audio_write(int16_t *samples, size_t count)
+{
+    size_t overflow, first;
+
+    if (samples == NULL || count == 0 || !x64_audio_enabled) {
+        return 0;
+    }
+    /* Independent lossy host-delivery tap BEFORE Source reference capture's
+     * drop-oldest handling. Neither path consumes or rewrites the other. */
+    x64_native_delivery_audio(samples, count, x64_audio_rate, x64_audio_channel_count);
+    if (count > X64_AUDIO_NATIVE_BUFFER_SAMPLES - x64_audio_queued) {
+        overflow = count - (X64_AUDIO_NATIVE_BUFFER_SAMPLES - x64_audio_queued);
+        if ((uint64_t)overflow > UINT64_MAX - x64_audio_dropped_samples) {
+            x64_audio_dropped_samples = UINT64_MAX;
+        } else {
+            x64_audio_dropped_samples += (uint64_t)overflow;
+        }
+        if (count >= X64_AUDIO_NATIVE_BUFFER_SAMPLES) {
+            /* Retain exactly the newest bounded span, like Source's sequential
+             * drop-oldest handoff, without looping over discarded samples.
+             */
+            samples += count - X64_AUDIO_NATIVE_BUFFER_SAMPLES;
+            count = X64_AUDIO_NATIVE_BUFFER_SAMPLES;
+            x64_audio_read_pos = x64_audio_write_pos = x64_audio_queued = 0;
+        } else {
+            x64_audio_native_consume(overflow);
+        }
+    }
+    first = X64_AUDIO_NATIVE_BUFFER_SAMPLES - x64_audio_write_pos;
+    if (first > count) {
+        first = count;
+    }
+    memcpy(x64_audio_buffer + x64_audio_write_pos, samples, first * sizeof(*samples));
+    if (count > first) {
+        memcpy(x64_audio_buffer, samples + first, (count - first) * sizeof(*samples));
+    }
+    x64_audio_write_pos = (x64_audio_write_pos + count) % X64_AUDIO_NATIVE_BUFFER_SAMPLES;
+    x64_audio_queued += count;
+    return 0;
+}
+
+static int x64_audio_bufferspace(void)
+{
+    /* The capture handoff is not a timing device. Never block the core waiting
+     * for its own command-service drain; native pacing owns wall-clock timing.
+     */
+    return X64_AUDIO_NATIVE_BUFFER_SAMPLES;
+}
+
+static const sound_device_t x64_audio_device =
+{
+    "web",
+    x64_audio_init,
+    x64_audio_write,
+    NULL,
+    NULL,
+    x64_audio_bufferspace,
+    x64_audio_native_reset,
+    NULL,
+    NULL,
+    0,
+    SOUND_OUTPUT_CHANNELS_MAX,
+    false
+};
+
+const int16_t *x64_audio_native_samples(size_t *contiguous_count)
+{
+    size_t count = X64_AUDIO_NATIVE_BUFFER_SAMPLES - x64_audio_read_pos;
+    if (count > x64_audio_queued) {
+        count = x64_audio_queued;
+    }
+    if (contiguous_count != NULL) {
+        *contiguous_count = count;
+    }
+    return count == 0 ? NULL : x64_audio_buffer + x64_audio_read_pos;
+}
+
+size_t x64_audio_native_queued(void)
+{
+    return x64_audio_queued;
+}
+
+size_t x64_audio_native_capacity(void)
+{
+    return X64_AUDIO_NATIVE_BUFFER_SAMPLES;
+}
+
+uint32_t x64_audio_native_sample_rate(void)
+{
+    return x64_audio_rate;
+}
+
+uint32_t x64_audio_native_channels(void)
+{
+    return x64_audio_channel_count;
+}
+
+uint64_t x64_audio_native_overruns(void)
+{
+    return x64_audio_dropped_samples;
+}
+
+size_t x64_audio_native_consume(size_t sample_count)
+{
+    if (sample_count > x64_audio_queued) {
+        sample_count = x64_audio_queued;
+    }
+    x64_audio_read_pos = (x64_audio_read_pos + sample_count) % X64_AUDIO_NATIVE_BUFFER_SAMPLES;
+    x64_audio_queued -= sample_count;
+    return sample_count;
+}
+
+size_t x64_audio_native_copy(int16_t *destination, size_t capacity_samples)
+{
+    size_t copied = 0;
+    if (destination == NULL) {
+        return 0;
+    }
+    while (copied < capacity_samples && x64_audio_queued != 0) {
+        size_t count;
+        const int16_t *samples = x64_audio_native_samples(&count);
+        if (count > capacity_samples - copied) {
+            count = capacity_samples - copied;
+        }
+        memcpy(destination + copied, samples, count * sizeof(*samples));
+        x64_audio_native_consume(count);
+        copied += count;
+    }
+    return copied;
+}
+
+void x64_audio_native_set_enabled(int enabled)
+{
+    enabled = enabled ? 1 : 0;
+    if (x64_audio_enabled != enabled) {
+        x64_audio_native_reset();
+    }
+    x64_audio_enabled = enabled;
+}
+
+int sound_init_web_device(void)
+{
+    return sound_register_device(&x64_audio_device);
+}
 #endif
 
 static int dummy_write(int16_t *pbuf, size_t nr)

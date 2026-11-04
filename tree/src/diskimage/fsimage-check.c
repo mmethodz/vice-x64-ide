@@ -33,6 +33,11 @@
 #include "diskimage.h"
 #include "fsimage-check.h"
 
+#ifdef WEB64_HOST_NATIVE
+#define X64_MEMORY_FILE_STDIO
+#include "arch/headless/x64-memory-file.h"
+#endif
+
 
 /** \brief  Check if (\a track, \a sector) is valid for \a image
  *

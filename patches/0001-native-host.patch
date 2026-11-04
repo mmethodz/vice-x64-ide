@@ -1,0 +1,4119 @@
+--- a/src/6510dtvcore.c
++++ b/src/6510dtvcore.c
+@@ -69,6 +69,17 @@
+ 
+ #ifndef WEB64_FRAME_STEP_RESET
+ #define WEB64_FRAME_STEP_RESET() do { } while (0)
++#endif
++
++#if defined(WEB64_HOST_NATIVE) && !defined(DRIVE_CPU)
++#include "arch/headless/x64-native-host.h"
++#define X64_NATIVE_RESET_APPLIED() do { \
++    EXPORT_REGISTERS(); \
++    x64_native_reset_applied(); \
++    IMPORT_REGISTERS(); \
++} while (0)
++#else
++#define X64_NATIVE_RESET_APPLIED() do { } while (0)
+ #endif
+ 
+ #ifndef C64DTV
+@@ -444,6 +455,7 @@
+                 CHECK_PROFILE_INTERRUPT(addr, 0xfffc);                         \
+                 JUMP(addr);                                                    \
+                 DMA_ON_RESET;                                                  \
++                X64_NATIVE_RESET_APPLIED();                                    \
+             }                                                                  \
+         }                                                                      \
+         if (ik & (IK_MONITOR | IK_DMA)) {                                      \
+@@ -1794,7 +1806,7 @@
+ 
+     {
+         opcode_t opcode;
+-#if defined(VICE_WEB) && defined(__EMSCRIPTEN__) && !defined(DRIVE_CPU)
++#if defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)) && !defined(DRIVE_CPU)
+         /* The VIC can cross the frame edge during an instruction or stolen
+          * cycles. Stop only here, after monitor/interrupt handling and before
+          * the next opcode fetch. A monitor stop at this boundary wins. */
+--- a/src/arch/headless/main.c
++++ b/src/arch/headless/main.c
+@@ -65,6 +65,9 @@
+ 
+ #ifdef __EMSCRIPTEN__
+ #include <emscripten/emscripten.h>
++#elif defined(WEB64_HOST_NATIVE)
++#define EMSCRIPTEN_KEEPALIVE
++#include "x64-native-host.h"
+ #endif
+ 
+ /* For the ugly hack below */
+@@ -72,7 +75,7 @@
+ # include "windows.h"
+ #endif
+ 
+-#ifdef __EMSCRIPTEN__
++#if defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)
+ EMSCRIPTEN_KEEPALIVE int vice_web_boot(void);
+ EMSCRIPTEN_KEEPALIVE void vice_web_reset(int mode);
+ EMSCRIPTEN_KEEPALIVE int vice_web_pause(void);
+@@ -182,10 +185,13 @@
+ {
+     /* printf("%s\n", __func__); */
+ 
++#ifdef WEB64_HOST_NATIVE
++    x64_native_prepare(&argc, argv);
++#endif
+     return main_program(argc, argv);
+ }
+ 
+-#ifdef __EMSCRIPTEN__
++#if defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)
+ static int vice_web_started = 0;
+ static int vice_web_exit_code = 0;
+ static int vice_web_snapshot_pending_flag = 0;
+@@ -347,6 +353,14 @@
+     (void)addr;
+     (void)data;
+ 
++#ifdef WEB64_HOST_NATIVE
++    if (!x64_native_program_may_apply()) {
++        vice_web_run_program_result_code = -7;
++        vice_web_run_program_pending_flag = 0;
++        x64_native_program_rejected();
++        return;
++    }
++#endif
+     for (i = 0; i < vice_web_run_program_length; i++) {
+         mem_inject((uint32_t)(vice_web_run_program_load_address + i), vice_web_run_program_bytes[i]);
+     }
+@@ -359,6 +373,9 @@
+ #endif
+     vice_web_run_program_result_code = 0;
+     vice_web_run_program_pending_flag = 0;
++#ifdef WEB64_HOST_NATIVE
++    x64_native_program_applied();
++#endif
+ }
+ 
+ EMSCRIPTEN_KEEPALIVE int vice_web_run_program(int load_address, int start_address, const unsigned char *bytes, int length)
+@@ -1510,6 +1527,7 @@
+     return warp_enabled;
+ }
+ 
++#ifdef __EMSCRIPTEN__
+ static void vice_web_boot_async(void *unused)
+ {
+     (void)unused;
+@@ -1528,6 +1546,10 @@
+     emscripten_async_call(vice_web_boot_async, NULL, 0);
+     return 0;
+ }
++
++#else
++EMSCRIPTEN_KEEPALIVE int vice_web_boot(void) { return vice_web_started ? 0 : -1; }
++#endif
+ 
+ EMSCRIPTEN_KEEPALIVE void vice_web_reset(int mode)
+ {
+@@ -1784,6 +1806,9 @@
+             break;
+     }
+ 
++#ifdef WEB64_HOST_NATIVE
++    x64_native_snapshot_applied(vice_web_snapshot_operation, vice_web_snapshot_result_code);
++#endif
+     vice_web_snapshot_operation = 0;
+     vice_web_snapshot_pending_flag = 0;
+ }
+@@ -1856,6 +1881,11 @@
+ #endif
+ 
+ 
++#ifdef WEB64_HOST_NATIVE
++#include "x64-memory-file-impl.h"
++#include "x64-native-host-impl.h"
++#endif
++
+ /** \brief  Exit handler
+  */
+ void main_exit(void)
+--- a/src/arch/headless/ui.c
++++ b/src/arch/headless/ui.c
+@@ -34,6 +34,9 @@
+ 
+ #ifdef __EMSCRIPTEN__
+ #include <emscripten/emscripten.h>
++#endif
++#ifdef WEB64_HOST_NATIVE
++#include "x64-native-host.h"
+ #endif
+ 
+ #ifdef UNIX_COMPILE
+@@ -334,12 +337,23 @@
+     /* log_verbose(LOG_DEFAULT, "%s", __func__); */
+     vsync_suspend_speed_eval();
+     is_pause_trap_active = 1;
++#ifdef WEB64_HOST_NATIVE
++    x64_native_stop_entered();
++#endif
+ #ifdef __EMSCRIPTEN__
+     while (ui_pause_loop_iteration()) {
+         emscripten_sleep(10);
+     }
++#elif defined(WEB64_HOST_NATIVE)
++    while (ui_pause_loop_iteration()) {
++        x64_native_pump();
++        archdep_usleep(1000);
++    }
+ #endif
+     is_pause_trap_active = 0;
++#ifdef WEB64_HOST_NATIVE
++    x64_native_stop_left();
++#endif
+ }
+ 
+ #if defined(__EMSCRIPTEN__) || defined(VICE_WEB)
+--- a/src/arch/headless/video.c
++++ b/src/arch/headless/video.c
+@@ -38,6 +38,13 @@
+ #include "resources.h"
+ #include "videoarch.h"
+ #include "video.h"
++#ifdef WEB64_HOST_NATIVE
++#include "x64-native-delivery.h"
++#include "maincpu.h"
++#include "viewport.h"
++static video_canvas_t *web_native_canvas;
++static uint64_t web_native_render_clock;
++#endif
+ 
+ #ifdef __EMSCRIPTEN__
+ #include <emscripten/emscripten.h>
+@@ -265,6 +272,25 @@
+     return web_frame_ready;
+ }
+ 
++#ifdef WEB64_HOST_NATIVE
++int x64_native_frame_geometry(uint32_t values[8], uint64_t *frame, uint64_t *clock)
++{
++    float aspect;
++    int standard, model;
++    if (!web_native_canvas || !web_native_canvas->geometry || !web_frame_width || !web_frame_height ||
++        resources_get_int("MachineVideoStandard", &standard) || resources_get_int("VICIIModel", &model)) return 0;
++    aspect = web_native_canvas->geometry->pixel_aspect_ratio;
++    if (!(aspect > 0.0f && aspect < 16.0f)) return 0;
++    values[0] = web_frame_width; values[1] = web_frame_height;
++    values[2] = web_frame_width * 4; values[3] = 1;
++    memcpy(values + 4, &aspect, sizeof(aspect));
++    values[5] = (uint32_t)standard; values[6] = (uint32_t)model;
++    values[7] = (web_frame_ready ? 1 : 0) | 2;
++    *frame = web_frame_number; *clock = web_native_render_clock;
++    return 1;
++}
++#endif
++
+ 
+ /** \brief  Command line options related to generic video output
+  */
+@@ -366,6 +392,9 @@
+     /* printf("%s\n", __func__); */
+ 
+     canvas->created = 1;
++#ifdef WEB64_HOST_NATIVE
++    web_native_canvas = canvas;
++#endif
+ 
+     return canvas;
+ }
+@@ -376,6 +405,9 @@
+  */
+ void video_canvas_destroy(struct video_canvas_s *canvas)
+ {
++#ifdef WEB64_HOST_NATIVE
++    if (web_native_canvas == canvas) web_native_canvas = NULL;
++#endif
+     /* printf("%s\n", __func__); */
+ }
+ 
+@@ -440,6 +472,11 @@
+     web_frame_refresh_count++;
+     web_frame_number++;
+     web_frame_ready = 1;
++#ifdef WEB64_HOST_NATIVE
++    web_native_canvas = canvas;
++    web_native_render_clock = (uint64_t)maincpu_clk;
++    x64_native_delivery_frame(web_frame_pixels, web_frame_width, web_frame_height, web_frame_number);
++#endif
+ }
+ 
+ /** \brief Update canvas size to match the draw buffer size requested
+--- a/src/arch/headless/vsyncarch.c
++++ b/src/arch/headless/vsyncarch.c
+@@ -41,6 +41,9 @@
+ #ifdef __EMSCRIPTEN__
+ #include <emscripten/emscripten.h>
+ #endif
++#ifdef WEB64_HOST_NATIVE
++#include "x64-native-host.h"
++#endif
+ 
+ #ifdef WINDOWS_COMPILE
+ #   include "windows.h"
+@@ -81,6 +84,8 @@
+     }
+ #ifdef __EMSCRIPTEN__
+     emscripten_sleep(0);
++#elif defined(WEB64_HOST_NATIVE)
++    x64_native_pump();
+ #endif
+ }
+ 
+--- a/src/arch/headless/web64-frame-step.h
++++ b/src/arch/headless/web64-frame-step.h
+@@ -1,7 +1,7 @@
+ #ifndef WEB64_FRAME_STEP_H
+ #define WEB64_FRAME_STEP_H
+ 
+-#if defined(VICE_WEB) && defined(__EMSCRIPTEN__)
++#if defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE))
+ /* Called by the VIC-II at its real start-of-frame transition. */
+ void vice_web_frame_step_vic_start(void);
+ /* Only the main CPU calls this, with its registers already exported. */
+--- /dev/null
++++ b/src/arch/headless/x64-memory-file-impl.h
+@@ -0,0 +1,571 @@
++/* Included once by headless/main.c, without X64_MEMORY_FILE_STDIO aliases.
++ * GPL-2.0-or-later. Resident backing only; retained VICE parsers stay unchanged.
++ */
++#include "x64-memory-file.h"
++#include <errno.h>
++#include <limits.h>
++#include <stdlib.h>
++#include <string.h>
++#include <zlib.h>
++
++typedef struct {
++    uint32_t references, length;
++    unsigned char bytes[];
++} x64_memory_data;
++typedef struct {
++    uint64_t id;
++    x64_memory_data *base;
++    unsigned char *working;
++    uint32_t kind, expected_crc, running_crc, received;
++    uint32_t working_length, working_capacity, pins, streams;
++    int sealed, private_copy, has_working;
++} x64_memory_blob;
++typedef struct {
++    /* An actual FILE member gives the opaque token correct FILE alignment.
++     * Its fields are never read; even closed tokens remain recognizable. */
++    FILE token;
++    x64_memory_blob *blob;
++    uint64_t position;
++    int active, readable, writable, append, eof, error;
++    int pushback, pushback_advance;
++} x64_memory_stream;
++
++static x64_memory_blob x64_memory_blobs[X64_MEMORY_FILE_MAX_BLOBS];
++static x64_memory_stream x64_memory_streams[X64_MEMORY_FILE_MAX_STREAMS];
++static uint64_t x64_memory_next_id;
++static size_t x64_memory_owned;
++
++static int x64_memory_fail(int code, int error)
++{
++    errno = error;
++    return code;
++}
++static x64_memory_blob *x64_memory_find(uint64_t id)
++{
++    unsigned int i;
++    if (!id) return NULL;
++    for (i = 0; i < X64_MEMORY_FILE_MAX_BLOBS; i++)
++        if (x64_memory_blobs[i].id == id) return &x64_memory_blobs[i];
++    return NULL;
++}
++static x64_memory_blob *x64_memory_slot(void)
++{
++    unsigned int i;
++    if (x64_memory_next_id == UINT64_MAX) return NULL;
++    for (i = 0; i < X64_MEMORY_FILE_MAX_BLOBS; i++)
++        if (!x64_memory_blobs[i].id) return &x64_memory_blobs[i];
++    return NULL;
++}
++static x64_memory_data *x64_memory_data_create(uint32_t length)
++{
++    size_t bytes = sizeof(x64_memory_data) + (size_t)length;
++    x64_memory_data *data;
++    if (bytes > X64_MEMORY_FILE_BUDGET - x64_memory_owned) return NULL;
++    data = malloc(bytes);
++    if (!data) return NULL;
++    data->references = 1;
++    data->length = length;
++    x64_memory_owned += bytes;
++    return data;
++}
++static const unsigned char *x64_memory_bytes(const x64_memory_blob *blob)
++{
++    return blob->has_working ? blob->working : blob->base->bytes;
++}
++static uint32_t x64_memory_length(const x64_memory_blob *blob)
++{
++    return blob->has_working ? blob->working_length : blob->base->length;
++}
++static uint32_t x64_memory_crc(const unsigned char *bytes, uint32_t length)
++{
++    return (uint32_t)crc32(crc32(0L, Z_NULL, 0), bytes, length);
++}
++size_t x64_memory_blob_allocated(void) { return x64_memory_owned; }
++
++int x64_memory_blob_begin(uint32_t kind, uint32_t length, uint32_t crc, uint64_t *out_id)
++{
++    x64_memory_blob *blob;
++    x64_memory_data *data;
++    if (out_id) *out_id = 0;
++    if (!out_id || kind < X64_MEMORY_D64 || kind > X64_MEMORY_REU ||
++        length > X64_MEMORY_FILE_MAX_BLOB) return x64_memory_fail(X64_MEMORY_INVALID, EINVAL);
++    blob = x64_memory_slot();
++    if (!blob) return x64_memory_fail(X64_MEMORY_LIMIT, ENOSPC);
++    data = x64_memory_data_create(length);
++    if (!data) return x64_memory_fail(X64_MEMORY_LIMIT, ENOMEM);
++    memset(blob, 0, sizeof(*blob));
++    blob->id = ++x64_memory_next_id;
++    blob->base = data;
++    blob->kind = kind;
++    blob->expected_crc = crc;
++    blob->running_crc = (uint32_t)crc32(0L, Z_NULL, 0);
++    *out_id = blob->id;
++    return X64_MEMORY_OK;
++}
++int x64_memory_blob_chunk(uint64_t id, uint32_t offset, const void *bytes, uint32_t length)
++{
++    x64_memory_blob *blob = x64_memory_find(id);
++    if (!blob) return x64_memory_fail(X64_MEMORY_NOT_FOUND, ENOENT);
++    if (blob->sealed || offset != blob->received || length > X64_MEMORY_FILE_MAX_CHUNK ||
++        length > blob->base->length - blob->received || (length && !bytes))
++        return x64_memory_fail(X64_MEMORY_INVALID, EINVAL);
++    if (length) {
++        memcpy(blob->base->bytes + offset, bytes, length);
++        blob->running_crc = (uint32_t)crc32(blob->running_crc, bytes, length);
++        blob->received += length;
++    }
++    return X64_MEMORY_OK;
++}
++int x64_memory_blob_seal(uint64_t id)
++{
++    x64_memory_blob *blob = x64_memory_find(id);
++    if (!blob) return x64_memory_fail(X64_MEMORY_NOT_FOUND, ENOENT);
++    if (blob->sealed || blob->received != blob->base->length)
++        return x64_memory_fail(X64_MEMORY_INVALID, EINVAL);
++    if (blob->running_crc != blob->expected_crc) return x64_memory_fail(X64_MEMORY_CRC, EIO);
++    blob->sealed = 1;
++    return X64_MEMORY_OK;
++}
++int x64_memory_blob_describe(uint64_t id, x64_memory_blob_info *out)
++{
++    x64_memory_blob *blob = x64_memory_find(id);
++    if (out) memset(out, 0, sizeof(*out));
++    if (!out) return x64_memory_fail(X64_MEMORY_INVALID, EINVAL);
++    if (!blob) return x64_memory_fail(X64_MEMORY_NOT_FOUND, ENOENT);
++    out->id = id;
++    out->kind = blob->kind;
++    out->sealed = blob->sealed != 0;
++    out->length = x64_memory_length(blob);
++    out->received = blob->private_copy ? out->length : blob->received;
++    out->crc32 = blob->sealed ? x64_memory_crc(x64_memory_bytes(blob), out->length) : blob->expected_crc;
++    return X64_MEMORY_OK;
++}
++int x64_memory_blob_read(uint64_t id, uint32_t offset, void *out, uint32_t length)
++{
++    x64_memory_blob *blob = x64_memory_find(id);
++    uint32_t available;
++    if (!blob) return x64_memory_fail(X64_MEMORY_NOT_FOUND, ENOENT);
++    if (!blob->sealed) return x64_memory_fail(X64_MEMORY_INVALID, EACCES);
++    available = x64_memory_length(blob);
++    if (offset > available || length > available - offset || (length && !out))
++        return x64_memory_fail(X64_MEMORY_INVALID, EINVAL);
++    if (length) memcpy(out, x64_memory_bytes(blob) + offset, length);
++    return X64_MEMORY_OK;
++}
++int x64_memory_blob_clone(uint64_t id, uint64_t *out_id)
++{
++    x64_memory_blob *source = x64_memory_find(id), *blob;
++    if (out_id) *out_id = 0;
++    if (!out_id) return x64_memory_fail(X64_MEMORY_INVALID, EINVAL);
++    if (!source) return x64_memory_fail(X64_MEMORY_NOT_FOUND, ENOENT);
++    if (!source->sealed || source->private_copy) return x64_memory_fail(X64_MEMORY_INVALID, EACCES);
++    blob = x64_memory_slot();
++    if (!blob) return x64_memory_fail(X64_MEMORY_LIMIT, ENOSPC);
++    memset(blob, 0, sizeof(*blob));
++    blob->id = ++x64_memory_next_id;
++    blob->base = source->base;
++    blob->base->references++;
++    blob->kind = source->kind;
++    blob->expected_crc = source->expected_crc;
++    blob->received = source->received;
++    blob->sealed = blob->private_copy = 1;
++    *out_id = blob->id;
++    return X64_MEMORY_OK;
++}
++int x64_memory_blob_capture(uint64_t id, uint64_t *out_id)
++{
++    x64_memory_blob *source = x64_memory_find(id), *blob;
++    x64_memory_data *data;
++    uint32_t length;
++    if (out_id) *out_id = 0;
++    if (!out_id) return x64_memory_fail(X64_MEMORY_INVALID, EINVAL);
++    if (!source) return x64_memory_fail(X64_MEMORY_NOT_FOUND, ENOENT);
++    if (!source->sealed) return x64_memory_fail(X64_MEMORY_INVALID, EACCES);
++    blob = x64_memory_slot();
++    if (!blob) return x64_memory_fail(X64_MEMORY_LIMIT, ENOSPC);
++    length = x64_memory_length(source);
++    data = x64_memory_data_create(length);
++    if (!data) return x64_memory_fail(X64_MEMORY_LIMIT, ENOMEM);
++    if (length) memcpy(data->bytes, x64_memory_bytes(source), length);
++    memset(blob, 0, sizeof(*blob));
++    blob->id = ++x64_memory_next_id;
++    blob->base = data;
++    blob->kind = source->kind;
++    blob->expected_crc = x64_memory_crc(data->bytes, length);
++    blob->running_crc = blob->expected_crc;
++    blob->received = length;
++    blob->sealed = 1;
++    *out_id = blob->id;
++    return X64_MEMORY_OK;
++}
++int x64_memory_blob_output(uint32_t kind, uint64_t *out_id)
++{
++    uint64_t id;
++    int result;
++    if (out_id) *out_id = 0;
++    if (!out_id) return x64_memory_fail(X64_MEMORY_INVALID, EINVAL);
++    result = x64_memory_blob_begin(kind, 0, 0, &id);
++    if (result) return result;
++    x64_memory_find(id)->sealed = x64_memory_find(id)->private_copy = 1;
++    *out_id = id;
++    return X64_MEMORY_OK;
++}
++int x64_memory_blob_pin(uint64_t id)
++{
++    x64_memory_blob *blob = x64_memory_find(id);
++    if (!blob) return x64_memory_fail(X64_MEMORY_NOT_FOUND, ENOENT);
++    if (!blob->sealed || blob->pins == UINT32_MAX) return x64_memory_fail(X64_MEMORY_INVALID, EINVAL);
++    blob->pins++;
++    return X64_MEMORY_OK;
++}
++int x64_memory_blob_unpin(uint64_t id)
++{
++    x64_memory_blob *blob = x64_memory_find(id);
++    if (!blob) return x64_memory_fail(X64_MEMORY_NOT_FOUND, ENOENT);
++    if (!blob->pins) return x64_memory_fail(X64_MEMORY_INVALID, EINVAL);
++    blob->pins--;
++    return X64_MEMORY_OK;
++}
++int x64_memory_blob_drop(uint64_t id)
++{
++    x64_memory_blob *blob = x64_memory_find(id);
++    x64_memory_data *base;
++    if (!blob) return x64_memory_fail(X64_MEMORY_NOT_FOUND, ENOENT);
++    if (blob->pins || blob->streams) return x64_memory_fail(X64_MEMORY_BUSY, EBUSY);
++    base = blob->base;
++    if (blob->working) {
++        x64_memory_owned -= blob->working_capacity;
++        free(blob->working);
++    }
++    if (!--base->references) {
++        x64_memory_owned -= sizeof(*base) + (size_t)base->length;
++        free(base);
++    }
++    memset(blob, 0, sizeof(*blob));
++    return X64_MEMORY_OK;
++}
++static const char *x64_memory_extension(uint32_t kind)
++{
++    return kind == X64_MEMORY_D64 ? "d64" : kind == X64_MEMORY_CRT ? "crt" : "reu";
++}
++int x64_memory_blob_path(uint64_t id, char *out, size_t capacity)
++{
++    x64_memory_blob *blob = x64_memory_find(id);
++    static const char hex[] = "0123456789abcdef";
++    unsigned int i;
++    if (out && capacity) out[0] = 0;
++    if (!out || capacity < 28) return x64_memory_fail(X64_MEMORY_INVALID, EINVAL);
++    if (!blob) return x64_memory_fail(X64_MEMORY_NOT_FOUND, ENOENT);
++    if (!blob->sealed) return x64_memory_fail(X64_MEMORY_INVALID, EACCES);
++    memcpy(out, "x64mem:", 7);
++    for (i = 0; i < 16; i++) out[7 + i] = hex[(id >> ((15 - i) * 4)) & 15];
++    out[23] = '.';
++    memcpy(out + 24, x64_memory_extension(blob->kind), 4);
++    return X64_MEMORY_OK;
++}
++int x64_memory_file_reserved(const char *path)
++{
++    static const char prefix[] = "x64mem:";
++    unsigned int i;
++    if (!path) return 0;
++    for (i = 0; i < 7; i++) {
++        unsigned char c = (unsigned char)path[i];
++        if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
++        if (c != (unsigned char)prefix[i]) return 0;
++    }
++    return 1;
++}
++static x64_memory_blob *x64_memory_name(const char *path)
++{
++    uint64_t id = 0;
++    unsigned int i;
++    x64_memory_blob *blob;
++    if (!path || strncmp(path, "x64mem:", 7) || strlen(path) != 27 || path[23] != '.') {
++        errno = EINVAL; return NULL;
++    }
++    for (i = 7; i < 23; i++) {
++        unsigned int c = (unsigned char)path[i], nibble;
++        if (c >= '0' && c <= '9') nibble = c - '0';
++        else if (c >= 'a' && c <= 'f') nibble = c - 'a' + 10;
++        else { errno = EINVAL; return NULL; }
++        id = (id << 4) | nibble;
++    }
++    blob = x64_memory_find(id);
++    if (!blob) { errno = ENOENT; return NULL; }
++    if (!blob->sealed || strcmp(path + 24, x64_memory_extension(blob->kind))) {
++        errno = EACCES; return NULL;
++    }
++    return blob;
++}
++int x64_memory_file_name_valid(const char *path) { return x64_memory_name(path) != NULL; }
++int x64_memory_file_equal(const char *left, const char *right)
++{
++    x64_memory_blob *a = x64_memory_name(left), *b = x64_memory_name(right);
++    return a && b && a == b;
++}
++int x64_memory_file_stat(const char *path, size_t *length, unsigned int *isdir)
++{
++    x64_memory_blob *blob = x64_memory_name(path);
++    if (length) *length = blob ? x64_memory_length(blob) : (size_t)-1;
++    if (isdir) *isdir = 0;
++    return blob ? 0 : -1;
++}
++int x64_memory_file_access(const char *path, int mode)
++{
++    x64_memory_blob *blob = x64_memory_name(path);
++    if (!blob) return -1;
++    if ((mode & ~7) || (mode & 1) || ((mode & 2) && !blob->private_copy)) {
++        errno = EACCES; return -1;
++    }
++    return 0;
++}
++int x64_memory_file_remove(const char *path)
++{
++    x64_memory_blob *blob = x64_memory_name(path);
++    return blob && !x64_memory_blob_drop(blob->id) ? 0 : -1;
++}
++static x64_memory_stream *x64_memory_stream_find(FILE *file)
++{
++    unsigned int i;
++    for (i = 0; i < X64_MEMORY_FILE_MAX_STREAMS; i++)
++        if (file == &x64_memory_streams[i].token) return &x64_memory_streams[i];
++    return NULL;
++}
++int x64_memory_file_stream(FILE *file) { return x64_memory_stream_find(file) != NULL; }
++static int x64_memory_stream_error(x64_memory_stream *stream, int error)
++{
++    if (stream) stream->error = 1;
++    errno = error;
++    return -1;
++}
++FILE *x64_memory_file_fopen(const char *path, const char *mode)
++{
++    x64_memory_blob *blob;
++    x64_memory_stream *stream = NULL;
++    unsigned int i;
++    int plus = 0, truncate, append, readable, writable;
++    if (!x64_memory_file_reserved(path)) return fopen(path, mode);
++    blob = x64_memory_name(path);
++    if (!blob) return NULL;
++    if (!mode || (mode[0] != 'r' && mode[0] != 'w' && mode[0] != 'a')) { errno = EINVAL; return NULL; }
++    for (i = 1; mode[i]; i++) {
++        if (mode[i] == '+' && !plus) plus = 1;
++        else if (mode[i] != 'b' && mode[i] != 't') { errno = EINVAL; return NULL; }
++    }
++    truncate = mode[0] == 'w'; append = mode[0] == 'a';
++    readable = mode[0] == 'r' || plus;
++    writable = mode[0] != 'r' || plus;
++    if (writable && !blob->private_copy) { errno = EACCES; return NULL; }
++    for (i = 0; i < X64_MEMORY_FILE_MAX_STREAMS; i++)
++        if (!x64_memory_streams[i].active) { stream = &x64_memory_streams[i]; break; }
++    if (!stream) { errno = EMFILE; return NULL; }
++    if (truncate) { blob->has_working = 1; blob->working_length = 0; }
++    memset(stream, 0, sizeof(*stream));
++    stream->active = 1; stream->blob = blob;
++    stream->readable = readable; stream->writable = writable; stream->append = append;
++    stream->pushback = -1;
++    stream->position = append ? x64_memory_length(blob) : 0;
++    blob->streams++;
++    return &stream->token;
++}
++int x64_memory_file_fclose(FILE *file)
++{
++    x64_memory_stream *stream = x64_memory_stream_find(file);
++    if (!stream) return fclose(file);
++    if (!stream->active) { errno = EBADF; return EOF; }
++    stream->blob->streams--;
++    stream->active = 0; stream->blob = NULL;
++    return 0;
++}
++size_t x64_memory_file_fread(void *out, size_t size, size_t count, FILE *file)
++{
++    x64_memory_stream *stream = x64_memory_stream_find(file);
++    size_t wanted, copied = 0, available, take;
++    unsigned char *destination = out;
++    uint32_t length;
++    if (!stream) return fread(out, size, count, file);
++    if (!stream->active || !stream->readable) { x64_memory_stream_error(stream, EBADF); return 0; }
++    if (!size || !count) return 0;
++    if (!out || count > SIZE_MAX / size) { x64_memory_stream_error(stream, EINVAL); return 0; }
++    wanted = size * count;
++    if (stream->pushback >= 0) {
++        destination[copied++] = (unsigned char)stream->pushback;
++        stream->pushback = -1;
++        stream->position += stream->pushback_advance;
++    }
++    length = x64_memory_length(stream->blob);
++    available = stream->position < length ? length - (size_t)stream->position : 0;
++    take = wanted - copied < available ? wanted - copied : available;
++    if (take) memcpy(destination + copied, x64_memory_bytes(stream->blob) + (size_t)stream->position, take);
++    stream->position += take;
++    copied += take;
++    if (copied < wanted) stream->eof = 1;
++    return copied / size;
++}
++static int x64_memory_working_reserve(x64_memory_blob *blob, uint32_t required)
++{
++    unsigned char *bytes;
++    uint32_t capacity = blob->working_capacity;
++    if (!blob->has_working && required < blob->base->length) required = blob->base->length;
++    if (required > X64_MEMORY_FILE_MAX_BLOB) { errno = EFBIG; return -1; }
++    if (required > capacity) {
++        uint32_t grown = capacity <= X64_MEMORY_FILE_MAX_BLOB / 2 ? capacity * 2 : X64_MEMORY_FILE_MAX_BLOB;
++        if (grown < required) grown = required;
++        if ((size_t)(grown - capacity) > X64_MEMORY_FILE_BUDGET - x64_memory_owned) { errno = ENOSPC; return -1; }
++        bytes = realloc(blob->working, grown);
++        if (!bytes) { errno = ENOMEM; return -1; }
++        blob->working = bytes;
++        blob->working_capacity = grown;
++        x64_memory_owned += grown - capacity;
++    }
++    if (!blob->has_working) {
++        if (blob->base->length) memcpy(blob->working, blob->base->bytes, blob->base->length);
++        blob->working_length = blob->base->length;
++        blob->has_working = 1;
++    }
++    return 0;
++}
++size_t x64_memory_file_fwrite(const void *data, size_t size, size_t count, FILE *file)
++{
++    x64_memory_stream *stream = x64_memory_stream_find(file);
++    size_t length;
++    uint32_t previous, end;
++    if (!stream) return fwrite(data, size, count, file);
++    if (!stream->active || !stream->writable) { x64_memory_stream_error(stream, EBADF); return 0; }
++    if (!size || !count) return 0;
++    if (!data || count > SIZE_MAX / size) { x64_memory_stream_error(stream, EINVAL); return 0; }
++    length = size * count;
++    if (stream->append) stream->position = x64_memory_length(stream->blob);
++    if (stream->position > X64_MEMORY_FILE_MAX_BLOB || length > X64_MEMORY_FILE_MAX_BLOB - stream->position) {
++        x64_memory_stream_error(stream, EFBIG); return 0;
++    }
++    end = (uint32_t)(stream->position + length);
++    if (x64_memory_working_reserve(stream->blob, end)) { stream->error = 1; return 0; }
++    previous = stream->blob->working_length;
++    if (stream->position > previous) memset(stream->blob->working + previous, 0, (size_t)stream->position - previous);
++    memcpy(stream->blob->working + (size_t)stream->position, data, length);
++    if (end > previous) stream->blob->working_length = end;
++    stream->position = end;
++    return count;
++}
++int x64_memory_file_seek64(FILE *file, int64_t offset, int whence)
++{
++    x64_memory_stream *stream = x64_memory_stream_find(file);
++    uint64_t base, target;
++    if (!stream || !stream->active) { errno = EBADF; return -1; }
++    if (whence == SEEK_SET) base = 0;
++    else if (whence == SEEK_CUR) base = stream->position;
++    else if (whence == SEEK_END) base = x64_memory_length(stream->blob);
++    else { errno = EINVAL; return -1; }
++    if (offset < 0) {
++        uint64_t distance = (uint64_t)(-(offset + 1)) + 1;
++        if (distance > base) { errno = EINVAL; return -1; }
++        target = base - distance;
++    } else {
++        if ((uint64_t)offset > INT64_MAX - base) { errno = EOVERFLOW; return -1; }
++        target = base + (uint64_t)offset;
++    }
++    stream->position = target; stream->eof = 0; stream->pushback = -1;
++    return 0;
++}
++int64_t x64_memory_file_tell64(FILE *file)
++{
++    x64_memory_stream *stream = x64_memory_stream_find(file);
++    if (!stream || !stream->active) { errno = EBADF; return -1; }
++    return (int64_t)stream->position;
++}
++int64_t x64_memory_file_size(FILE *file)
++{
++    x64_memory_stream *stream = x64_memory_stream_find(file);
++    if (!stream || !stream->active) { errno = EBADF; return -1; }
++    return x64_memory_length(stream->blob);
++}
++int x64_memory_file_fseek(FILE *file, long offset, int whence)
++{
++    return x64_memory_file_stream(file) ? x64_memory_file_seek64(file, offset, whence) : fseek(file, offset, whence);
++}
++long x64_memory_file_ftell(FILE *file)
++{
++    int64_t position;
++    if (!x64_memory_file_stream(file)) return ftell(file);
++    position = x64_memory_file_tell64(file);
++    if (position > LONG_MAX) { errno = EOVERFLOW; return -1; }
++    return (long)position;
++}
++void x64_memory_file_rewind(FILE *file)
++{
++    if (!x64_memory_file_stream(file)) { rewind(file); return; }
++    x64_memory_file_seek64(file, 0, SEEK_SET);
++    x64_memory_file_clearerr(file);
++}
++int x64_memory_file_feof(FILE *file)
++{
++    x64_memory_stream *stream = x64_memory_stream_find(file);
++    if (!stream) return feof(file);
++    if (!stream->active) { errno = EBADF; return 0; }
++    return stream->eof;
++}
++int x64_memory_file_ferror(FILE *file)
++{
++    x64_memory_stream *stream = x64_memory_stream_find(file);
++    if (!stream) return ferror(file);
++    if (!stream->active) { errno = EBADF; return 1; }
++    return stream->error;
++}
++void x64_memory_file_clearerr(FILE *file)
++{
++    x64_memory_stream *stream = x64_memory_stream_find(file);
++    if (!stream) { clearerr(file); return; }
++    if (!stream->active) { errno = EBADF; return; }
++    stream->eof = stream->error = 0;
++}
++int x64_memory_file_fflush(FILE *file)
++{
++    x64_memory_stream *stream = x64_memory_stream_find(file);
++    if (!stream) return fflush(file);
++    if (!stream->active) { errno = EBADF; return EOF; }
++    return 0;
++}
++int x64_memory_file_fgetc(FILE *file)
++{
++    unsigned char value;
++    if (!x64_memory_file_stream(file)) return fgetc(file);
++    return x64_memory_file_fread(&value, 1, 1, file) == 1 ? value : EOF;
++}
++int x64_memory_file_ungetc(int value, FILE *file)
++{
++    x64_memory_stream *stream = x64_memory_stream_find(file);
++    if (!stream) return ungetc(value, file);
++    if (!stream->active || !stream->readable || value == EOF || stream->pushback >= 0) return EOF;
++    stream->pushback = (unsigned char)value;
++    stream->pushback_advance = stream->position != 0;
++    if (stream->pushback_advance) stream->position--;
++    stream->eof = 0;
++    return (unsigned char)value;
++}
++char *x64_memory_file_fgets(char *out, int capacity, FILE *file)
++{
++    int value, copied = 0;
++    if (!x64_memory_file_stream(file)) return fgets(out, capacity, file);
++    if (!out || capacity <= 0) { errno = EINVAL; return NULL; }
++    while (copied < capacity - 1 && (value = x64_memory_file_fgetc(file)) != EOF) {
++        out[copied++] = (char)value;
++        if (value == '\n') break;
++    }
++    out[copied] = 0;
++    return copied || capacity == 1 ? out : NULL;
++}
++int x64_memory_file_fputc(int value, FILE *file)
++{
++    unsigned char byte = (unsigned char)value;
++    if (!x64_memory_file_stream(file)) return fputc(value, file);
++    return x64_memory_file_fwrite(&byte, 1, 1, file) == 1 ? byte : EOF;
++}
++int x64_memory_file_fputs(const char *value, FILE *file)
++{
++    size_t length;
++    if (!x64_memory_file_stream(file)) return fputs(value, file);
++    if (!value) { errno = EINVAL; return EOF; }
++    length = strlen(value);
++    return x64_memory_file_fwrite(value, 1, length, file) == length ? 0 : EOF;
++}
+--- /dev/null
++++ b/src/arch/headless/x64-memory-file.h
+@@ -0,0 +1,108 @@
++/* x64-owned bounded resident media and stdio adapter. GPL-2.0-or-later.
++ * All calls belong to the VICE core thread. No native pointer enters the wire.
++ */
++#ifndef X64_MEMORY_FILE_H
++#define X64_MEMORY_FILE_H
++#include <stddef.h>
++#include <stdint.h>
++#include <stdio.h>
++
++#define X64_MEMORY_FILE_MAX_BLOB (16u * 1024u * 1024u)
++#define X64_MEMORY_FILE_BUDGET (128u * 1024u * 1024u)
++#define X64_MEMORY_FILE_MAX_BLOBS 64u
++#define X64_MEMORY_FILE_MAX_STREAMS 64u
++#define X64_MEMORY_FILE_MAX_CHUNK (256u * 1024u)
++#define X64_MEMORY_FILE_PATH_BYTES 32u
++
++enum {
++    X64_MEMORY_D64 = 1, X64_MEMORY_CRT = 2, X64_MEMORY_REU = 3
++};
++enum {
++    X64_MEMORY_OK = 0, X64_MEMORY_INVALID = -1,
++    X64_MEMORY_NOT_FOUND = -2, X64_MEMORY_LIMIT = -3,
++    X64_MEMORY_CRC = -4, X64_MEMORY_BUSY = -5
++};
++/* Explicitly serialize fields; this native struct is NOT the 28-byte wire. */
++typedef struct {
++    uint64_t id;
++    uint32_t length, crc32, kind, sealed, received;
++} x64_memory_blob_info;
++
++int x64_memory_blob_begin(uint32_t kind, uint32_t length, uint32_t crc32, uint64_t *out_id);
++int x64_memory_blob_chunk(uint64_t id, uint32_t offset, const void *data, uint32_t length);
++int x64_memory_blob_seal(uint64_t id);
++int x64_memory_blob_describe(uint64_t id, x64_memory_blob_info *out);
++int x64_memory_blob_read(uint64_t id, uint32_t offset, void *out, uint32_t length);
++int x64_memory_blob_drop(uint64_t id);
++/* A clone shares an immutable baseline; its first write takes a private copy.
++ * Clone accepts sealed immutable inputs only. Capture creates such an input
++ * from current private bytes; output creates an empty private export target. */
++int x64_memory_blob_clone(uint64_t id, uint64_t *out_private_id);
++int x64_memory_blob_capture(uint64_t id, uint64_t *out_sealed_id);
++int x64_memory_blob_output(uint32_t kind, uint64_t *out_private_id);
++int x64_memory_blob_pin(uint64_t id);
++int x64_memory_blob_unpin(uint64_t id);
++int x64_memory_blob_path(uint64_t id, char *out, size_t capacity);
++size_t x64_memory_blob_allocated(void);
++
++/* Reserved names never fall back to host I/O, including malformed/unknown IDs.
++ * A valid name is exactly x64mem:<16 lowercase hexadecimal ID>.<d64|crt|reu>.
++ * File operations require sealed entries; immutable uploads cannot be written.
++ * Paths remain registered independently of FILE lifetime. Pins and open streams
++ * prevent drop of that entry. Drop of an original upload keeps a shared clone's
++ * immutable baseline alive. There is no automatic path creation or file growth
++ * beyond MAX_BLOB; a write beyond EOF zero-fills its gap. */
++int x64_memory_file_reserved(const char *path);
++int x64_memory_file_name_valid(const char *path);
++int x64_memory_file_equal(const char *left, const char *right);
++int x64_memory_file_stat(const char *path, size_t *length, unsigned int *isdir);
++int x64_memory_file_access(const char *path, int mode);
++int x64_memory_file_remove(const char *path);
++/* Recognizes both live and closed resident FILE tokens. Never pass one to libc. */
++int x64_memory_file_stream(FILE *stream);
++int x64_memory_file_seek64(FILE *stream, int64_t offset, int whence);
++int64_t x64_memory_file_tell64(FILE *stream);
++int64_t x64_memory_file_size(FILE *stream);
++FILE *x64_memory_file_fopen(const char *path, const char *mode);
++int x64_memory_file_fclose(FILE *stream);
++size_t x64_memory_file_fread(void *out, size_t size, size_t count, FILE *stream);
++size_t x64_memory_file_fwrite(const void *data, size_t size, size_t count, FILE *stream);
++int x64_memory_file_fseek(FILE *stream, long offset, int whence);
++long x64_memory_file_ftell(FILE *stream);
++void x64_memory_file_rewind(FILE *stream);
++int x64_memory_file_feof(FILE *stream);
++int x64_memory_file_ferror(FILE *stream);
++void x64_memory_file_clearerr(FILE *stream);
++int x64_memory_file_fflush(FILE *stream);
++int x64_memory_file_fgetc(FILE *stream);
++int x64_memory_file_ungetc(int value, FILE *stream);
++char *x64_memory_file_fgets(char *out, int capacity, FILE *stream);
++int x64_memory_file_fputc(int value, FILE *stream);
++int x64_memory_file_fputs(const char *value, FILE *stream);
++#endif
++
++/* Opt in only AFTER all system/library headers in selected I/O translation
++ * units. Main includes declarations/implementation without these aliases. */
++#if defined(WEB64_HOST_NATIVE) && defined(X64_MEMORY_FILE_STDIO) && !defined(X64_MEMORY_FILE_STDIO_INSTALLED)
++#define X64_MEMORY_FILE_STDIO_INSTALLED
++#undef getc
++#undef putc
++#define fopen x64_memory_file_fopen
++#define fclose x64_memory_file_fclose
++#define fread x64_memory_file_fread
++#define fwrite x64_memory_file_fwrite
++#define fseek x64_memory_file_fseek
++#define ftell x64_memory_file_ftell
++#define rewind x64_memory_file_rewind
++#define feof x64_memory_file_feof
++#define ferror x64_memory_file_ferror
++#define clearerr x64_memory_file_clearerr
++#define fflush x64_memory_file_fflush
++#define fgetc x64_memory_file_fgetc
++#define getc x64_memory_file_fgetc
++#define ungetc x64_memory_file_ungetc
++#define fgets x64_memory_file_fgets
++#define fputc x64_memory_file_fputc
++#define putc x64_memory_file_fputc
++#define fputs x64_memory_file_fputs
++#endif
+--- /dev/null
++++ b/src/arch/headless/x64-native-audio-host-api.h
+@@ -0,0 +1,67 @@
++#ifndef X64_PRIVATE_AUDIO_HOST_V1_H
++#define X64_PRIVATE_AUDIO_HOST_V1_H
++/* Loaded inside the native VICE helper, never Qt. Versioned same-release C ABI.
++ * create/join/destroy are lifecycle operations OFF the core/audio callback.
++ * try_submit/control/status are bounded, allocation-free and never wait.
++ * The core producer alone writes ingress. Full ingress drops NEW samples.
++ * All pointers are caller-owned for the duration of a call. No allocator or C++
++ * layout crosses the boundary. Unload only after join+destroy succeeds.
++ */
++#include <stdint.h>
++#ifdef __cplusplus
++extern "C" {
++#endif
++typedef struct X64AudioHost X64AudioHost;
++enum { X64_AUDIO_HOST_OK=0, X64_AUDIO_HOST_DROPPED=1, X64_AUDIO_HOST_PENDING=2,
++       X64_AUDIO_HOST_INVALID=-1, X64_AUDIO_HOST_ABI=-2, X64_AUDIO_HOST_CLOSED=-3 };
++enum { X64_AUDIO_DEVICE_STARTING=0, X64_AUDIO_DEVICE_RUNNING=1,
++       X64_AUDIO_DEVICE_NO_ENDPOINT=2, X64_AUDIO_DEVICE_RECONFIGURING=3,
++       X64_AUDIO_DEVICE_STOPPED=4, X64_AUDIO_DEVICE_FAILED=5 };
++enum { X64_AUDIO_CONTROL_RUNNING=1, X64_AUDIO_CONTROL_MUTE=2,
++       X64_AUDIO_CONTROL_VOLUME=3, X64_AUDIO_CONTROL_FLUSH=4,
++       X64_AUDIO_CONTROL_REOPEN=5, X64_AUDIO_CONTROL_SUSPEND=6,
++       X64_AUDIO_CONTROL_LATENCY=7 };
++typedef struct X64AudioHostConfig {
++    uint32_t abi_version, struct_bytes, latency_ms, initial_input_rate;
++    uint32_t initial_input_channels, initial_mute; float initial_volume;
++    uint32_t reserved[9];
++} X64AudioHostConfig;
++typedef struct X64AudioHostInput {
++    uint32_t abi_version, struct_bytes;
++    uint64_t runtime_id, epoch, application_generation, ring_generation, observed_core_clock;
++    uint32_t sample_rate, channels, frame_count, reserved;
++} X64AudioHostInput;
++typedef struct X64AudioHostControl {
++    uint32_t abi_version, struct_bytes, operation, value;
++    float volume; uint32_t reserved[3];
++} X64AudioHostControl;
++typedef struct X64AudioHostStatus {
++    uint32_t abi_version, struct_bytes, state, flags;
++    uint32_t input_rate, input_channels, device_rate, device_channels;
++    uint32_t device_buffer_frames, device_period_frames, latency_ms; int32_t last_hresult;
++    uint64_t device_generation, input_generation, submitted_frames, input_dropped_frames;
++    uint64_t rendered_frames, silent_frames, underrun_frames, device_reopens;
++    uint64_t default_notifications, invalidations, callback_count, max_callback_qpc_ticks;
++    uint64_t callback_qpc_frequency, dsp_underrun_frames, dsp_discontinuities, observed_core_clock;
++} X64AudioHostStatus;
++/* status.flags: bit0 real WASAPI endpoint, bit1 muted, bit2 running requested,
++ * bit3 suspended, bit4 stop requested. Tests never label fake endpoints real.
++ */
++typedef struct X64AudioHostApi {
++    uint32_t abi_version, struct_bytes, max_submit_frames, reserved;
++    int32_t (*create)(const X64AudioHostConfig *, X64AudioHost **);
++    int32_t (*try_submit)(X64AudioHost *, const X64AudioHostInput *, const int16_t *);
++    int32_t (*control)(X64AudioHost *, const X64AudioHostControl *);
++    int32_t (*status)(X64AudioHost *, X64AudioHostStatus *);
++    void (*request_stop)(X64AudioHost *);
++    int32_t (*join)(X64AudioHost *, uint32_t timeout_ms);
++    int32_t (*destroy)(X64AudioHost *);
++} X64AudioHostApi;
++/* Only this symbol is dynamically resolved. Validate exact table bytes/major
++ * before exposing any core callback. DSP DLL is an adjacent pinned dependency.
++ */
++int32_t x64_audio_host_v1_get_api(uint32_t abi_version,uint32_t table_bytes,X64AudioHostApi *out);
++#ifdef __cplusplus
++}
++#endif
++#endif
+--- /dev/null
++++ b/src/arch/headless/x64-native-audio-host-impl.h
+@@ -0,0 +1,320 @@
++/* x64-owned lifecycle/ABI adapter, GPL-2.0-or-later, like VICE.
++ * x64-native-audio-host-api.h is a byte-identical build-stage mirror of
++ * native/audio/x64_audio_host.h, the authoritative private MSVC DLL C ABI.
++ * Only explicit -x64-audio-host absolute paths can load a playback module.
++ */
++#include "x64-native-audio-host.h"
++#include "x64-native-audio-host-api.h"
++#include <stdlib.h>
++#include <string.h>
++#ifdef WINDOWS_COMPILE
++#include <windows.h>
++#include <wchar.h>
++typedef char x64_audio_config_size[(sizeof(X64AudioHostConfig) == 64) ? 1 : -1];
++typedef char x64_audio_input_size[(sizeof(X64AudioHostInput) == 64) ? 1 : -1];
++typedef char x64_audio_control_size[(sizeof(X64AudioHostControl) == 32) ? 1 : -1];
++typedef char x64_audio_status_size[(sizeof(X64AudioHostStatus) == 176) ? 1 : -1];
++typedef char x64_audio_api_size[(sizeof(X64AudioHostApi) == 72) ? 1 : -1];
++static HANDLE x64_play_thread, x64_play_stop;
++static volatile LONG x64_play_state, x64_play_error, x64_play_calls;
++static wchar_t x64_play_path[32768];
++static X64AudioHostApi x64_play_api;
++static X64AudioHost *x64_play_host;
++static uint64_t x64_play_runtime, x64_play_epoch, x64_play_apply, x64_play_generation = 1;
++static int x64_play_paused, x64_play_warp, x64_play_suspended, x64_play_running = 1, x64_play_synced;
++static int x64_play_resources_ready;
++
++static int x64_play_enter(void)
++{
++    InterlockedIncrement(&x64_play_calls);
++    if (InterlockedCompareExchange(&x64_play_state, 0, 0) == 2) return 1;
++    InterlockedDecrement(&x64_play_calls);
++    return 0;
++}
++static void x64_play_leave(void) { InterlockedDecrement(&x64_play_calls); }
++static int x64_play_call_control(uint32_t operation, uint32_t value, float volume)
++{
++    X64AudioHostControl control;
++    int result;
++    if (!x64_play_enter()) return X64_AUDIO_HOST_PENDING;
++    memset(&control, 0, sizeof(control));
++    control.abi_version = 1; control.struct_bytes = sizeof(control);
++    control.operation = operation; control.value = value; control.volume = volume;
++    result = x64_play_api.control(x64_play_host, &control);
++    x64_play_leave();
++    return result;
++}
++static DWORD WINAPI x64_play_lifecycle(void *unused)
++{
++    HMODULE module;
++    X64AudioHostConfig config;
++    typedef int32_t (*get_api_fn)(uint32_t, uint32_t, X64AudioHostApi *);
++    get_api_fn get_api;
++    int result;
++    (void)unused;
++    module = LoadLibraryExW(x64_play_path, NULL,
++        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
++    if (!module) goto windows_failure;
++    /* Windows FARPROC/function-pointer widths match this 64-bit C ABI. memcpy
++     * avoids a cross-toolchain C function-pointer cast or allocator boundary. */
++    {
++        FARPROC address = GetProcAddress(module, "x64_audio_host_v1_get_api");
++        if (!address) { InterlockedExchange(&x64_play_error, ERROR_PROC_NOT_FOUND); goto failure; }
++        memcpy(&get_api, &address, sizeof(get_api));
++    }
++    memset(&x64_play_api, 0, sizeof(x64_play_api));
++    result = get_api(1, sizeof(x64_play_api), &x64_play_api);
++    if (result || x64_play_api.abi_version != 1 || x64_play_api.struct_bytes != sizeof(x64_play_api) ||
++        x64_play_api.reserved || !x64_play_api.max_submit_frames || x64_play_api.max_submit_frames > 8192 ||
++        !x64_play_api.create || !x64_play_api.try_submit || !x64_play_api.control || !x64_play_api.status ||
++        !x64_play_api.request_stop || !x64_play_api.join || !x64_play_api.destroy) {
++        InterlockedExchange(&x64_play_error, result ? result : X64_AUDIO_HOST_ABI); goto failure;
++    }
++    memset(&config, 0, sizeof(config));
++    config.abi_version = 1; config.struct_bytes = sizeof(config);
++    config.latency_ms = 20; config.initial_input_rate = 48000;
++    config.initial_input_channels = 2; config.initial_volume = 1.0f;
++    result = x64_play_api.create(&config, &x64_play_host);
++    if (result || !x64_play_host) {
++        InterlockedExchange(&x64_play_error, result ? result : X64_AUDIO_HOST_ABI);
++        if (x64_play_host) {
++            /* A failed factory must normally return no handle. If it does
++             * expose ownership, do not unload until that handle is quiescent. */
++            x64_play_api.request_stop(x64_play_host);
++            if (x64_play_api.join(x64_play_host, 1500) || x64_play_api.destroy(x64_play_host)) {
++                InterlockedExchange(&x64_play_state, 3); return 0;
++            }
++            x64_play_host = NULL;
++        }
++        goto failure;
++    }
++    /* The entire immutable API/context publication precedes Ready. */
++    InterlockedExchange(&x64_play_state, 2);
++    WaitForSingleObject(x64_play_stop, INFINITE); /* Lifecycle worker ONLY. */
++    InterlockedExchange(&x64_play_state, 4);
++    while (InterlockedCompareExchange(&x64_play_calls, 0, 0)) Sleep(1);
++    x64_play_api.request_stop(x64_play_host);
++    result = x64_play_api.join(x64_play_host, 1500);
++    if (!result) result = x64_play_api.destroy(x64_play_host);
++    if (result) {
++        /* Do NOT unload while any DLL/device thread may still execute. The
++         * supervisor's process teardown is the final release for this failure. */
++        InterlockedExchange(&x64_play_error, result);
++        InterlockedExchange(&x64_play_state, 3);
++        return 0;
++    }
++    x64_play_host = NULL;
++    FreeLibrary(module);
++    InterlockedExchange(&x64_play_state, 5);
++    return 0;
++windows_failure:
++    InterlockedExchange(&x64_play_error, (LONG)GetLastError());
++    InterlockedExchange(&x64_play_state, 3);
++    return 0;
++failure:
++    FreeLibrary(module);
++    InterlockedExchange(&x64_play_state, 3);
++    return 0;
++}
++static int x64_play_absolute(const wchar_t *path)
++{
++    return (path[0] && path[1] && path[2] &&
++        ((path[0] >= L'a' && path[0] <= L'z') || (path[0] >= L'A' && path[0] <= L'Z')) &&
++        path[1] == L':' && (path[2] == L'\\' || path[2] == L'/')) ||
++        (path[0] == L'\\' && path[1] == L'\\' && path[2]);
++}
++static int x64_play_copy_path(wchar_t *destination, size_t capacity, const wchar_t *path)
++{
++    size_t i, length = wcslen(path);
++    if (!x64_play_absolute(path) || length >= capacity) return 0;
++    wcscpy(destination, path);
++    /* DLL_LOAD_DIR dependency lookup requires native separators even though
++     * the primary DLL itself can load with '/'. Do not rewrite the explicitly
++     * verbatim/device namespaces: their spelling has different Win32 rules. */
++    if (!(length >= 4 && path[0] == L'\\' && path[1] == L'\\' &&
++        (path[2] == L'?' || path[2] == L'.') && path[3] == L'\\')) {
++        for (i = 0; i < length; ++i) if (destination[i] == L'/') destination[i] = L'\\';
++    }
++    return 1;
++}
++#endif
++
++void x64_native_audio_host_prepare(int *argc, char **argv, uint64_t runtime,
++    uint64_t epoch, uint64_t generation, int paused)
++{
++    int input, output = 1, requested = 0, valid = 1;
++#ifdef WINDOWS_COMPILE
++    HMODULE shell = NULL;
++    wchar_t **wide = NULL;
++    int wide_count = 0;
++    typedef wchar_t **(WINAPI *command_line_fn)(const wchar_t *, int *);
++    command_line_fn parse = NULL;
++    for (input = 1; input < *argc; ++input) {
++        if (!strcmp(argv[input], "-x64-audio-host")) {
++            FARPROC address;
++            if (++requested > 1 || input + 1 >= *argc) { valid = 0; if (input + 1 < *argc) ++input; continue; }
++            shell = LoadLibraryExW(L"shell32.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
++            if (!shell) { valid = 0; ++input; continue; }
++            address = GetProcAddress(shell, "CommandLineToArgvW");
++            if (address) memcpy(&parse, &address, sizeof(parse));
++            if (parse) wide = parse(GetCommandLineW(), &wide_count);
++            if (!wide || wide_count != *argc || !x64_play_copy_path(x64_play_path,
++                sizeof(x64_play_path) / sizeof(*x64_play_path), wide[input + 1])) valid = 0;
++            if (wide) { LocalFree(wide); wide = NULL; }
++            FreeLibrary(shell); shell = NULL;
++            ++input;
++        } else argv[output++] = argv[input];
++    }
++#else
++    for (input = 1; input < *argc; ++input) {
++        if (!strcmp(argv[input], "-x64-audio-host")) { ++requested; if (input + 1 < *argc) ++input; }
++        else argv[output++] = argv[input];
++    }
++    (void)runtime; (void)epoch; (void)generation; (void)paused; (void)valid;
++#endif
++    argv[output] = NULL; *argc = output;
++    if (!requested) return;
++#ifdef WINDOWS_COMPILE
++    if (!valid || !runtime) {
++        InterlockedExchange(&x64_play_error, ERROR_INVALID_PARAMETER); InterlockedExchange(&x64_play_state, 3); return;
++    }
++    x64_play_runtime = runtime; x64_play_epoch = epoch; x64_play_apply = generation; x64_play_paused = !!paused;
++    x64_play_stop = CreateEventW(NULL, TRUE, FALSE, NULL);
++    if (!x64_play_stop) { InterlockedExchange(&x64_play_error, (LONG)GetLastError()); InterlockedExchange(&x64_play_state, 3); return; }
++    InterlockedExchange(&x64_play_state, 1);
++    x64_play_thread = CreateThread(NULL, 0, x64_play_lifecycle, NULL, 0, NULL);
++    if (!x64_play_thread) { InterlockedExchange(&x64_play_error, (LONG)GetLastError()); InterlockedExchange(&x64_play_state, 3); }
++    atexit(x64_native_audio_host_request_stop);
++#endif
++}
++int x64_native_audio_host_available(void)
++{
++#ifdef WINDOWS_COMPILE
++    return InterlockedCompareExchange(&x64_play_state, 0, 0) == 2;
++#else
++    return 0;
++#endif
++}
++void x64_native_audio_host_context(uint64_t epoch, uint64_t generation, int paused, int invalidate)
++{
++#ifdef WINDOWS_COMPILE
++    if (x64_play_epoch != epoch || x64_play_apply != generation || x64_play_paused != !!paused || invalidate) {
++        x64_play_epoch = epoch; x64_play_apply = generation; x64_play_paused = !!paused;
++        if (x64_play_generation == UINT64_MAX) { x64_native_audio_host_request_stop(); return; }
++        ++x64_play_generation;
++        x64_play_synced = 0;
++        x64_native_audio_host_poll();
++    }
++#else
++    (void)epoch; (void)generation; (void)paused; (void)invalidate;
++#endif
++}
++void x64_native_audio_host_poll(void)
++{
++#ifdef WINDOWS_COMPILE
++    int warp = x64_play_resources_ready ? !!vice_web_warp_enabled() : 0;
++    if (x64_play_resources_ready && x64_play_warp != warp) {
++        x64_play_warp = !!warp; x64_native_audio_host_reset();
++    }
++    if (x64_native_audio_host_available() && !x64_play_synced) {
++        x64_play_call_control(X64_AUDIO_CONTROL_RUNNING, x64_play_running && !x64_play_paused, 0.0f);
++        x64_play_call_control(X64_AUDIO_CONTROL_SUSPEND, x64_play_suspended || x64_play_warp, 0.0f);
++        x64_play_call_control(X64_AUDIO_CONTROL_FLUSH, 0, 0.0f);
++        x64_play_synced = 1;
++    }
++#endif
++}
++void x64_native_audio_host_safe_point(void)
++{
++#ifdef WINDOWS_COMPILE
++    /* prepare() precedes core initialization; sound-enable reset there must
++     * not observe retained core metrics until the first real safe point. */
++    x64_play_resources_ready = 1;
++#endif
++    x64_native_audio_host_poll();
++}
++void x64_native_audio_host_reset(void)
++{
++#ifdef WINDOWS_COMPILE
++    x64_native_audio_host_context(x64_play_epoch, x64_play_apply, x64_play_paused, 1);
++    x64_native_audio_host_poll();
++#endif
++}
++void x64_native_audio_host_submit(const int16_t *samples, size_t count, uint32_t rate, uint32_t channels)
++{
++#ifdef WINDOWS_COMPILE
++    X64AudioHostInput input;
++    size_t frames, offset = 0;
++    x64_native_audio_host_safe_point();
++    if (!samples || !count || !rate || channels < 1 || channels > 2 || count % channels ||
++        x64_play_paused || x64_play_warp || x64_play_suspended || !x64_play_running || !x64_play_enter()) return;
++    memset(&input, 0, sizeof(input)); input.abi_version = 1; input.struct_bytes = sizeof(input);
++    input.runtime_id = x64_play_runtime; input.epoch = x64_play_epoch; input.application_generation = x64_play_apply;
++    input.ring_generation = x64_play_generation; input.observed_core_clock = (uint64_t)maincpu_clk;
++    input.sample_rate = rate; input.channels = channels;
++    frames = count / channels;
++    while (offset < frames) {
++        size_t part = frames - offset;
++        if (part > x64_play_api.max_submit_frames) part = x64_play_api.max_submit_frames;
++        input.frame_count = (uint32_t)part;
++        (void)x64_play_api.try_submit(x64_play_host, &input, samples + offset * channels);
++        offset += part;
++    }
++    x64_play_leave();
++#else
++    (void)samples; (void)count; (void)rate; (void)channels;
++#endif
++}
++int x64_native_audio_host_control(uint32_t operation, uint32_t value, uint32_t volume_q16)
++{
++#ifdef WINDOWS_COMPILE
++    if (!x64_native_audio_host_available()) return X64_AUDIO_HOST_PENDING;
++    if (operation < 1 || operation > 7 || volume_q16 > 65536 ||
++        (operation != 3 && volume_q16) ||
++        ((operation == 1 || operation == 2 || operation == 6) && value > 1) ||
++        ((operation == 3 || operation == 4 || operation == 5) && value) ||
++        (operation == 7 && (value < 10 || value > 80 || value % 10))) return X64_AUDIO_HOST_INVALID;
++    if (operation == 1) { x64_play_running = !!value; x64_play_synced = 0; }
++    if (operation == 6) { x64_play_suspended = !!value; x64_play_synced = 0; }
++    if (operation == 4) { x64_native_audio_host_reset(); return X64_AUDIO_HOST_OK; }
++    if (operation == 1 || operation == 6) { x64_native_audio_host_reset(); return X64_AUDIO_HOST_OK; }
++    return x64_play_call_control(operation, value, (float)volume_q16 / 65536.0f);
++#else
++    (void)operation; (void)value; (void)volume_q16;
++    return X64_AUDIO_HOST_CLOSED;
++#endif
++}
++void x64_native_audio_host_status(uint32_t *loader_state, int32_t *loader_error, unsigned char status[176])
++{
++    memset(status, 0, 176);
++#ifdef WINDOWS_COMPILE
++    X64AudioHostStatus snapshot;
++    int result;
++    *loader_state = (uint32_t)InterlockedCompareExchange(&x64_play_state, 0, 0);
++    *loader_error = (int32_t)InterlockedCompareExchange(&x64_play_error, 0, 0);
++    if (!x64_play_enter()) return;
++    memset(&snapshot, 0, sizeof(snapshot)); snapshot.abi_version = 1; snapshot.struct_bytes = sizeof(snapshot);
++    result = x64_play_api.status(x64_play_host, &snapshot);
++    x64_play_leave();
++    if (result || snapshot.abi_version != 1 || snapshot.struct_bytes != sizeof(snapshot)) { *loader_error = result ? result : X64_AUDIO_HOST_ABI; return; }
++    /* Windows x64/arm64 are LE; fixed-width ABI is independently sizeof-checked.
++     * No pointer, allocator state, padding or private object crosses this copy. */
++    memcpy(status, &snapshot, 176);
++#else
++    *loader_state = 0; *loader_error = -4;
++#endif
++}
++void x64_native_audio_host_request_stop(void)
++{
++#ifdef WINDOWS_COMPILE
++    if (x64_play_stop) SetEvent(x64_play_stop);
++#endif
++}
++int x64_native_audio_host_shutdown_complete(void)
++{
++#ifdef WINDOWS_COMPILE
++    return !x64_play_thread || WaitForSingleObject(x64_play_thread, 0) == WAIT_OBJECT_0;
++#else
++    return 1;
++#endif
++}
+--- /dev/null
++++ b/src/arch/headless/x64-native-audio-host.h
+@@ -0,0 +1,20 @@
++/* x64-owned helper-process playback adapter. GPL-2.0-or-later, like VICE.
++ * DLL lifecycle runs on its worker; core callbacks never wait or allocate.
++ */
++#ifndef X64_NATIVE_AUDIO_HOST_H
++#define X64_NATIVE_AUDIO_HOST_H
++#include <stdint.h>
++#include <stddef.h>
++void x64_native_audio_host_prepare(int *argc, char **argv, uint64_t runtime,
++    uint64_t epoch, uint64_t generation, int paused);
++int x64_native_audio_host_available(void);
++void x64_native_audio_host_poll(void);
++void x64_native_audio_host_safe_point(void);
++void x64_native_audio_host_context(uint64_t epoch, uint64_t generation, int paused, int invalidate);
++void x64_native_audio_host_reset(void);
++void x64_native_audio_host_submit(const int16_t *, size_t, uint32_t rate, uint32_t channels);
++int x64_native_audio_host_control(uint32_t operation, uint32_t value, uint32_t volume_q16);
++void x64_native_audio_host_status(uint32_t *loader_state, int32_t *loader_error, unsigned char status[176]);
++void x64_native_audio_host_request_stop(void);
++int x64_native_audio_host_shutdown_complete(void);
++#endif
+--- /dev/null
++++ b/src/arch/headless/x64-native-delivery-impl.h
+@@ -0,0 +1,309 @@
++/* Included once after the core APIs. GPL-2.0-or-later, like VICE.
++ * Fixed LE bytes, aligned Windows Interlocked64, no native pointer wire ABI.
++ * Private paging-file section. The creator owns mapping/reader lease lifetime.
++ */
++#include "x64-native-delivery.h"
++#include "x64-native-audio-host.h"
++#include <stdlib.h>
++#include <string.h>
++#ifdef WINDOWS_COMPILE
++#include <windows.h>
++#define X64_DLY_TOTAL UINT64_C(12653184)
++#define X64_DLY_FRAME_OFFSET 4096
++#define X64_DLY_FRAME_STRIDE 4194432
++#define X64_DLY_AUDIO_OFFSET 12587392
++#define X64_DLY_AUDIO_DATA 12587648
++#define X64_DLY_AUDIO_FRAMES 16384
++static unsigned char *x64_dly_view;
++static int x64_dly_open;
++static uint64_t x64_dly_runtime, x64_dly_epoch, x64_dly_apply;
++static uint64_t x64_dly_ring, x64_dly_control, x64_dly_sequence, x64_dly_audio_publication;
++static uint64_t x64_dly_frame_drops, x64_dly_audio_drops;
++static uint32_t x64_dly_rate, x64_dly_channels;
++static int x64_dly_paused;
++static int x64_dly_last_render_valid;
++static uint64_t x64_dly_last_render_epoch, x64_dly_last_render_apply;
++static uint64_t x64_dly_last_render_frame, x64_dly_last_render_clock;
++static uint32_t x64_dly_last_render_width, x64_dly_last_render_height;
++/* Read only at the single-core safe boundary. Never retain a pixel pointer
++ * across a possible retained-canvas realloc/resize. */
++uint8_t *vice_web_frame_pixels(void);
++int vice_web_frame_width(void), vice_web_frame_height(void);
++int vice_web_frame_number(void), vice_web_frame_ready(void);
++static void x64_dly_republish(void);
++
++static uint32_t x64_dly_get32(const unsigned char *p)
++{
++    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
++        ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
++}
++static uint64_t x64_dly_get64(const unsigned char *p)
++{
++    return x64_dly_get32(p) | ((uint64_t)x64_dly_get32(p + 4) << 32);
++}
++static void x64_dly_put32(unsigned char *p, uint32_t value)
++{
++    int i;
++    for (i = 0; i < 4; ++i) p[i] = (unsigned char)(value >> (i * 8));
++}
++static void x64_dly_put64(unsigned char *p, uint64_t value)
++{
++    x64_dly_put32(p, (uint32_t)value); x64_dly_put32(p + 4, (uint32_t)(value >> 32));
++}
++static uint64_t x64_dly_load(size_t offset)
++{
++    return (uint64_t)InterlockedCompareExchange64((volatile LONG64 *)(x64_dly_view + offset), 0, 0);
++}
++static void x64_dly_store(size_t offset, uint64_t value)
++{
++    InterlockedExchange64((volatile LONG64 *)(x64_dly_view + offset), (LONG64)value);
++}
++static int x64_dly_cas(size_t offset, uint64_t expected, uint64_t value)
++{
++    return (uint64_t)InterlockedCompareExchange64(
++        (volatile LONG64 *)(x64_dly_view + offset), (LONG64)value, (LONG64)expected) == expected;
++}
++static void x64_dly_add_drop(uint64_t *counter, uint64_t count, size_t offset)
++{
++    *counter = count > UINT64_MAX - *counter ? UINT64_MAX : *counter + count;
++    x64_dly_store(offset, *counter);
++}
++static void x64_dly_close(int acknowledge)
++{
++    /* All publisher work and this close acknowledgment use the core thread.
++     * No payload or metadata writes occur after acknowledgment. */
++    if (x64_dly_control <= UINT64_MAX - 2) {
++        x64_dly_store(80, ++x64_dly_control);
++        x64_dly_store(112, 4);
++        x64_dly_store(80, ++x64_dly_control);
++    } else x64_dly_store(112, 4);
++    x64_dly_open = 0;
++    if (acknowledge) x64_dly_store(144, 1);
++}
++static int x64_dly_active(void)
++{
++    if (!x64_dly_open) return 0;
++    if (x64_dly_load(136)) {
++        x64_dly_close(1);
++        return 0;
++    }
++    return 1;
++}
++static void x64_dly_invalidate(void)
++{
++    if (!x64_dly_active()) return;
++    if (x64_dly_ring == UINT64_MAX || x64_dly_control > UINT64_MAX - 2) {
++        x64_dly_close(0);
++        return; /* Explicit delivery exhaustion, never wrap into stale identity. */
++    }
++    x64_dly_store(80, ++x64_dly_control);
++    x64_dly_store(88, x64_dly_epoch);
++    x64_dly_store(96, x64_dly_apply);
++    x64_dly_store(104, ++x64_dly_ring);
++    x64_dly_store(112, 1 | (x64_dly_paused ? 2 : 0));
++    x64_dly_store(80, ++x64_dly_control);
++    x64_dly_republish();
++    /* Never reset or advance the consumer-owned audio read cursor. New audio
++     * waits for the reader to flush read=write and acknowledge this generation.
++     * Reading frame leases also remain untouched until the reader releases. */
++}
++#endif
++
++void x64_native_delivery_prepare(uint64_t epoch, uint64_t generation, int paused)
++{
++#ifdef WINDOWS_COMPILE
++    const char *name = getenv("X64_NATIVE_DELIVERY");
++    const unsigned char *p;
++    HANDLE mapping;
++    size_t i;
++    if (!name || !*name) return;
++    for (p = (const unsigned char *)name; *p; ++p) if (*p < 32 || *p > 126) return;
++    mapping = OpenFileMappingA(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, name);
++    if (!mapping) return;
++    x64_dly_view = (unsigned char *)MapViewOfFile(mapping,
++        FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, (SIZE_T)X64_DLY_TOTAL);
++    CloseHandle(mapping);
++    if (!x64_dly_view) return;
++    if ((uintptr_t)x64_dly_view % 64) goto rejected;
++    if (memcmp(x64_dly_view, "X64DLY01", 8) ||
++        x64_dly_get32(x64_dly_view + 8) != 1 || x64_dly_get32(x64_dly_view + 12) != 4096 ||
++        x64_dly_get64(x64_dly_view + 16) != X64_DLY_TOTAL ||
++        !(x64_dly_runtime = x64_dly_get64(x64_dly_view + 24)) ||
++        x64_dly_get32(x64_dly_view + 32) != 1024 || x64_dly_get32(x64_dly_view + 36) != 1024 ||
++        x64_dly_get32(x64_dly_view + 40) != 3 ||
++        x64_dly_get32(x64_dly_view + 44) != X64_DLY_FRAME_STRIDE ||
++        x64_dly_get64(x64_dly_view + 48) != X64_DLY_FRAME_OFFSET ||
++        x64_dly_get64(x64_dly_view + 56) != X64_DLY_AUDIO_OFFSET ||
++        x64_dly_get32(x64_dly_view + 64) != X64_DLY_AUDIO_FRAMES ||
++        x64_dly_get32(x64_dly_view + 68) != 2) goto rejected;
++    for (i = 72; i < 4096; ++i) if (x64_dly_view[i]) goto rejected;
++    for (i = 0; i < 3; ++i) {
++        if (x64_dly_get64(x64_dly_view + X64_DLY_FRAME_OFFSET + i * X64_DLY_FRAME_STRIDE)) goto rejected;
++    }
++    for (i = 0; i < 256; ++i) if (x64_dly_view[X64_DLY_AUDIO_OFFSET + i]) goto rejected;
++    x64_dly_epoch = epoch; x64_dly_apply = generation; x64_dly_paused = !!paused;
++    x64_dly_open = 1;
++    x64_dly_invalidate();
++    return;
++rejected:
++    UnmapViewOfFile(x64_dly_view); x64_dly_view = NULL;
++#else
++    (void)epoch; (void)generation; (void)paused;
++#endif
++}
++int x64_native_delivery_available(void)
++{
++#ifdef WINDOWS_COMPILE
++    return x64_dly_active();
++#else
++    return 0;
++#endif
++}
++uint64_t x64_native_delivery_runtime(void)
++{
++#ifdef WINDOWS_COMPILE
++    return x64_dly_active() ? x64_dly_runtime : 0;
++#else
++    return 0;
++#endif
++}
++void x64_native_delivery_poll(void)
++{
++    x64_native_audio_host_safe_point();
++#ifdef WINDOWS_COMPILE
++    (void)x64_dly_active();
++#endif
++}
++void x64_native_delivery_context(uint64_t epoch, uint64_t generation, int paused, int invalidate)
++{
++    x64_native_audio_host_context(epoch, generation, paused, invalidate);
++#ifdef WINDOWS_COMPILE
++    if (!x64_dly_active()) return;
++    if (epoch != x64_dly_epoch || generation != x64_dly_apply || !!paused != x64_dly_paused || invalidate) {
++        x64_dly_epoch = epoch; x64_dly_apply = generation; x64_dly_paused = !!paused;
++        x64_dly_invalidate();
++    }
++#else
++    (void)epoch; (void)generation; (void)paused; (void)invalidate;
++#endif
++}
++void x64_native_delivery_audio_reset(void)
++{
++    x64_native_audio_host_reset();
++#ifdef WINDOWS_COMPILE
++    x64_dly_invalidate();
++#endif
++}
++#ifdef WINDOWS_COMPILE
++static void x64_dly_publish_frame(const uint8_t *pixels, uint32_t width, uint32_t height,
++    uint64_t frame, uint64_t observed_clock)
++{
++    size_t i, chosen = 0;
++    uint64_t expected = 0, oldest = UINT64_MAX, ticket;
++    unsigned char *slot;
++    if (!x64_dly_active() || !pixels || !width || !height || width > 1024 || height > 1024) return;
++    if (x64_dly_sequence == (UINT64_MAX >> 2)) { x64_dly_close(0); return; }
++    for (i = 0; i < 3; ++i) {
++        size_t offset = X64_DLY_FRAME_OFFSET + i * X64_DLY_FRAME_STRIDE;
++        uint64_t state = x64_dly_load(offset);
++        if ((state & 3) == 0) { chosen = offset; expected = state; break; }
++        if ((state & 3) == 2 && (state >> 2) < oldest) {
++            chosen = offset; expected = state; oldest = state >> 2;
++        }
++    }
++    ticket = ++x64_dly_sequence << 2;
++    if (!chosen || !x64_dly_cas(chosen, expected, ticket | 1)) {
++        x64_dly_add_drop(&x64_dly_frame_drops, 1, 120); return;
++    }
++    if ((expected & 3) == 2) x64_dly_add_drop(&x64_dly_frame_drops, 1, 120);
++    slot = x64_dly_view + chosen;
++    x64_dly_put64(slot + 8, ticket >> 2);
++    x64_dly_put64(slot + 16, x64_dly_runtime);
++    x64_dly_put64(slot + 24, x64_dly_epoch);
++    x64_dly_put64(slot + 32, x64_dly_apply);
++    x64_dly_put64(slot + 40, x64_dly_ring);
++    x64_dly_put64(slot + 48, frame);
++    x64_dly_put64(slot + 56, observed_clock);
++    x64_dly_put32(slot + 64, width); x64_dly_put32(slot + 68, height);
++    x64_dly_put32(slot + 72, width * 4); x64_dly_put32(slot + 76, 1);
++    x64_dly_put32(slot + 80, width * height * 4); x64_dly_put32(slot + 84, 0);
++    memset(slot + 88, 0, 40);
++    memcpy(slot + 128, pixels, (size_t)width * height * 4);
++    x64_dly_store(chosen, ticket | 2);
++}
++static void x64_dly_republish(void)
++{
++    /* Presentation/audio flush generations must not erase the paused display.
++     * Reuse the actual last completed render ONLY for the same guest identity.
++     * Ready + exact frame/dimensions prove the current canonical canvas still
++     * holds that render; a resize clears Ready. No render/PC/counter is advanced.
++     * Core safe-boundary calls cannot overlap a canvas write or realloc. */
++    if (!x64_dly_last_render_valid || x64_dly_last_render_epoch != x64_dly_epoch ||
++        x64_dly_last_render_apply != x64_dly_apply || !vice_web_frame_ready() ||
++        (uint32_t)vice_web_frame_number() != x64_dly_last_render_frame ||
++        (uint32_t)vice_web_frame_width() != x64_dly_last_render_width ||
++        (uint32_t)vice_web_frame_height() != x64_dly_last_render_height) return;
++    x64_dly_publish_frame(vice_web_frame_pixels(), x64_dly_last_render_width,
++        x64_dly_last_render_height, x64_dly_last_render_frame, x64_dly_last_render_clock);
++}
++#endif
++void x64_native_delivery_frame(const uint8_t *pixels, uint32_t width, uint32_t height, uint64_t frame)
++{
++#ifdef WINDOWS_COMPILE
++    if (!x64_dly_active() || !pixels || !width || !height || width > 1024 || height > 1024) return;
++    x64_dly_last_render_valid = 1;
++    x64_dly_last_render_epoch = x64_dly_epoch; x64_dly_last_render_apply = x64_dly_apply;
++    x64_dly_last_render_frame = frame; x64_dly_last_render_clock = (uint64_t)maincpu_clk;
++    x64_dly_last_render_width = width; x64_dly_last_render_height = height;
++    x64_dly_publish_frame(pixels, width, height, frame, (uint64_t)maincpu_clk);
++#else
++    (void)pixels; (void)width; (void)height; (void)frame;
++#endif
++}
++void x64_native_delivery_audio(const int16_t *samples, size_t count, uint32_t rate, uint32_t channels)
++{
++    x64_native_audio_host_submit(samples, count, rate, channels);
++#ifdef WINDOWS_COMPILE
++    uint64_t write, read, available;
++    size_t frames, accepted, i;
++    if (!x64_dly_active() || !samples || !count || !rate || channels < 1 || channels > 2 || count % channels) return;
++    frames = count / channels;
++    if (rate != x64_dly_rate || channels != x64_dly_channels) {
++        x64_dly_rate = rate; x64_dly_channels = channels;
++        x64_dly_invalidate();
++        if (!x64_dly_active()) return;
++    }
++    if (x64_dly_load(X64_DLY_AUDIO_OFFSET + 16) != x64_dly_ring || x64_dly_paused) {
++        x64_dly_add_drop(&x64_dly_audio_drops, frames, 128); return;
++    }
++    write = x64_dly_load(X64_DLY_AUDIO_OFFSET);
++    read = x64_dly_load(X64_DLY_AUDIO_OFFSET + 8);
++    if (write > UINT64_MAX - frames || x64_dly_audio_publication > UINT64_MAX - 2) {
++        x64_dly_close(0); return;
++    }
++    if (read > write || write - read > X64_DLY_AUDIO_FRAMES) {
++        /* Malformed reader cursor cannot become an out-of-bounds write. */
++        x64_dly_add_drop(&x64_dly_audio_drops, frames, 128); return;
++    }
++    available = X64_DLY_AUDIO_FRAMES - (write - read);
++    accepted = frames < available ? frames : (size_t)available;
++    for (i = 0; i < accepted; ++i) {
++        size_t offset = X64_DLY_AUDIO_DATA + (size_t)((write + i) % X64_DLY_AUDIO_FRAMES) * 4;
++        uint16_t a = (uint16_t)samples[i * channels];
++        uint16_t b = channels == 2 ? (uint16_t)samples[i * channels + 1] : 0;
++        x64_dly_view[offset] = (unsigned char)a; x64_dly_view[offset + 1] = (unsigned char)(a >> 8);
++        x64_dly_view[offset + 2] = (unsigned char)b; x64_dly_view[offset + 3] = (unsigned char)(b >> 8);
++    }
++    /* All metadata words are atomic; bounded consumer snapshot retries never
++     * race ordinary mutable metadata or claim an invented sample-start clock. */
++    x64_dly_store(X64_DLY_AUDIO_OFFSET + 24, ++x64_dly_audio_publication);
++    x64_dly_store(X64_DLY_AUDIO_OFFSET + 32, rate);
++    x64_dly_store(X64_DLY_AUDIO_OFFSET + 40, channels);
++    x64_dly_store(X64_DLY_AUDIO_OFFSET + 48, (uint64_t)maincpu_clk);
++    x64_dly_store(X64_DLY_AUDIO_OFFSET, write + accepted);
++    x64_dly_store(X64_DLY_AUDIO_OFFSET + 24, ++x64_dly_audio_publication);
++    if (accepted < frames) x64_dly_add_drop(&x64_dly_audio_drops, frames - accepted, 128);
++#else
++    (void)samples; (void)count; (void)rate; (void)channels;
++#endif
++}
+--- /dev/null
++++ b/src/arch/headless/x64-native-delivery.h
+@@ -0,0 +1,18 @@
++/* x64-owned nonblocking host delivery. GPL-2.0-or-later, like VICE.
++ * Called only by the retained emulator core thread. No guest algorithm,
++ * reference capture, device playback, allocation, IPC write or wait lives here.
++ */
++#ifndef X64_NATIVE_DELIVERY_H
++#define X64_NATIVE_DELIVERY_H
++#include <stddef.h>
++#include <stdint.h>
++void x64_native_delivery_prepare(uint64_t epoch, uint64_t generation, int paused);
++int x64_native_delivery_available(void);
++uint64_t x64_native_delivery_runtime(void);
++int x64_native_frame_geometry(uint32_t values[8], uint64_t *frame, uint64_t *clock);
++void x64_native_delivery_poll(void);
++void x64_native_delivery_context(uint64_t epoch, uint64_t generation, int paused, int invalidate);
++void x64_native_delivery_audio_reset(void);
++void x64_native_delivery_frame(const uint8_t *pixels, uint32_t width, uint32_t height, uint64_t frame);
++void x64_native_delivery_audio(const int16_t *samples, size_t count, uint32_t rate, uint32_t channels);
++#endif
+--- /dev/null
++++ b/src/arch/headless/x64-native-host-impl.h
+@@ -0,0 +1,729 @@
++/* Native transport adapter for the retained Web64 control implementation.
++ * GPL-2.0-or-later. Included once, after the retained APIs in headless/main.c.
++ * Wire bytes are LE values or owned copies, NEVER native pointers/structs.
++ * Input is read only at frame safe points and inside the real CPU pause trap.
++ * Injection still uses the original private buffer + interrupt trap; publication
++ * occurs in its successful trap callback, before any following instruction.
++ */
++#include <errno.h>
++#include <limits.h>
++#include "arch/shared/sounddrv/x64-audio-native.h"
++#include "x64-native-launch-permit.h"
++#include "x64-native-audio-host-impl.h"
++#include "x64-native-delivery-impl.h"
++#if defined(ENABLE_PROFILER) && ENABLE_PROFILER
++#include "c64/x64-profiler-native.h"
++int vice_web_profiler_control(int command, int frames, int capacity, uint32_t epoch);
++#endif
++#ifdef WINDOWS_COMPILE
++#include <io.h>
++#include <fcntl.h>
++#else
++#include <unistd.h>
++#include <poll.h>
++#endif
++
++uint8_t *vice_web_frame_pixels(void);
++int vice_web_frame_width(void), vice_web_frame_height(void), vice_web_frame_number(void);
++int vice_web_frame_ready(void);
++
++#define X64_NATIVE_HEADER 40
++#define X64_NATIVE_MAX_INPUT (1024 * 1024)
++#define X64_NATIVE_MAX_OUTPUT (32 * 1024 * 1024)
++static FILE *x64_native_output;
++static unsigned char x64_native_input[X64_NATIVE_HEADER + X64_NATIVE_MAX_INPUT];
++static size_t x64_native_received;
++static int x64_native_enabled, x64_native_pending;
++static uint16_t x64_native_pending_op;
++static uint64_t x64_native_pending_request, x64_native_pending_generation;
++static uint64_t x64_native_pending_permit;
++static uint64_t x64_native_epoch = 1, x64_native_generation;
++static uint64_t x64_native_stop_counter, x64_native_stop;
++static int x64_native_stop_mapping;
++static uint32_t x64_native_stop_mutation;
++static int x64_native_snapshot_done, x64_native_snapshot_result;
++static const char *x64_native_snapshot_root;
++static int x64_native_frame_revoked, x64_native_frame_floor;
++
++static uint32_t x64_get32(const unsigned char *p)
++{
++    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
++}
++static uint64_t x64_get64(const unsigned char *p)
++{
++    return x64_get32(p) | ((uint64_t)x64_get32(p + 4) << 32);
++}
++static void x64_put32(unsigned char *p, uint32_t v)
++{
++    int i; for (i = 0; i < 4; i++) p[i] = (unsigned char)(v >> (i * 8));
++}
++static void x64_put64(unsigned char *p, uint64_t v)
++{
++    x64_put32(p, (uint32_t)v); x64_put32(p + 4, (uint32_t)(v >> 32));
++}
++static void x64_native_reply(uint16_t op, uint64_t request, int status, const void *data, size_t length)
++{
++    unsigned char h[X64_NATIVE_HEADER] = { 'X', '6', '4', 'V', 2, 0 };
++    if (length > X64_NATIVE_MAX_OUTPUT) exit(EXIT_FAILURE);
++    h[6] = (unsigned char)op; h[7] = (unsigned char)(op >> 8);
++    x64_put32(h + 8, (uint32_t)length); x64_put32(h + 12, (uint32_t)status);
++    x64_put64(h + 16, request); x64_put64(h + 24, x64_native_epoch);
++    x64_put64(h + 32, x64_native_generation);
++    if (fwrite(h, 1, sizeof(h), x64_native_output) != sizeof(h) ||
++        (length && fwrite(data, 1, length, x64_native_output) != length) ||
++        fflush(x64_native_output)) exit(EXIT_FAILURE);
++}
++static void x64_native_snapshot_bytes(unsigned char b[72])
++{
++    uint32_t v[18]; int i;
++    v[0] = (uint32_t)(ui_pause_active() && ui_pause_trap_active());
++    for (i = 0; i < 6; i++) v[1 + i] = (uint32_t)vice_web_monitor_register_get(i);
++    v[7] = (uint32_t)vice_web_monitor_cpu_mapping();
++    v[8] = (uint32_t)vice_web_frame_step_epoch();
++    v[9] = (uint32_t)vice_web_frame_step_status();
++    v[10] = (uint32_t)vice_web_frame_step_stop_line();
++    v[11] = (uint32_t)vice_web_frame_step_stop_cycle();
++    v[12] = (uint32_t)maincpu_clk; v[13] = (uint32_t)(maincpu_clk >> 32);
++    v[14] = (uint32_t)vice_web_monitor_mutation_generation();
++#if defined(ENABLE_PROFILER) && ENABLE_PROFILER
++    v[15] = 1;
++#else
++    v[15] = 0;
++#endif
++    v[16] = (uint32_t)x64_native_stop; v[17] = (uint32_t)(x64_native_stop >> 32);
++    for (i = 0; i < 18; i++) x64_put32(b + i * 4, v[i]);
++}
++static void x64_native_status(uint16_t op, uint64_t request)
++{
++    unsigned char b[72];
++    x64_native_snapshot_bytes(b);
++    x64_native_reply(op, request, 0, b, sizeof(b));
++}
++static void x64_native_result(uint16_t op, uint64_t request, int result)
++{
++    unsigned char b[76];
++    x64_put32(b, (uint32_t)result); x64_native_snapshot_bytes(b + 4);
++    x64_native_reply(op, request, 0, b, sizeof(b));
++}
++static int x64_native_is_stopped(void)
++{
++    return ui_pause_active() && ui_pause_trap_active();
++}
++void x64_native_stop_entered(void)
++{
++    if (!x64_native_enabled) return;
++    if (x64_native_stop_counter == UINT64_MAX) exit(EXIT_FAILURE);
++    x64_native_stop = ++x64_native_stop_counter;
++    x64_native_stop_mapping = vice_web_monitor_cpu_mapping();
++    x64_native_stop_mutation = (uint32_t)vice_web_monitor_mutation_generation();
++    x64_native_delivery_context(x64_native_epoch, x64_native_generation, 1, 0);
++}
++void x64_native_stop_left(void)
++{
++    x64_native_stop = 0;
++    x64_native_delivery_context(x64_native_epoch, x64_native_generation, 0, 0);
++}
++static int x64_native_stop_matches(const unsigned char *p)
++{
++    if (!x64_native_is_stopped() || !x64_native_stop) return 0;
++    if (x64_native_stop_mapping != vice_web_monitor_cpu_mapping() ||
++        x64_native_stop_mutation != (uint32_t)vice_web_monitor_mutation_generation()) {
++        x64_native_stop_left(); return 0;
++    }
++    return x64_get64(p) == x64_native_stop &&
++        x64_get32(p + 8) == (uint32_t)x64_native_stop_mapping &&
++        x64_get32(p + 12) == x64_native_stop_mutation;
++}
++static void x64_native_invalidate_profile(void)
++{
++#if defined(ENABLE_PROFILER) && ENABLE_PROFILER
++    uint32_t info[46];
++    x64_profiler_info(info);
++    vice_web_profiler_control(4, 0, 0, info[6]);
++#endif
++}
++void x64_native_reset_applied(void)
++{
++    /* Called after the real CPU reset vector/JUMP/DMA sequence, with exported
++     * registers. Dispatch and machine_trigger_reset() are merely requests. */
++    if (!x64_native_enabled) return;
++    if (x64_native_epoch == UINT64_MAX) exit(EXIT_FAILURE);
++    ++x64_native_epoch; x64_native_generation = 0;
++    x64_native_stop_left(); x64_native_invalidate_profile();
++    x64_audio_native_reset();
++    x64_native_frame_floor = vice_web_frame_number(); x64_native_frame_revoked = 1;
++    x64_native_delivery_context(x64_native_epoch, x64_native_generation, x64_native_is_stopped(), 1);
++    if (x64_native_pending && x64_native_pending_op == 37) {
++        x64_native_pending = 0;
++        x64_native_status(37, x64_native_pending_request);
++    }
++}
++void x64_native_snapshot_applied(int operation, int result)
++{
++    if (!x64_native_enabled || !x64_native_pending ||
++        (x64_native_pending_op != 34 && x64_native_pending_op != 35)) return;
++    if (operation == VICE_WEB_SNAPSHOT_LOAD) {
++        /* An entered read can fail after changing machine state. Revoke the old
++         * launch even on failure; do not pair it with uncertain snapshot RAM. */
++        if (x64_native_epoch == UINT64_MAX) exit(EXIT_FAILURE);
++        ++x64_native_epoch; x64_native_generation = 0;
++        x64_native_invalidate_profile();
++        x64_native_delivery_context(x64_native_epoch, x64_native_generation, x64_native_is_stopped(), 1);
++    }
++    x64_native_snapshot_result = result;
++    x64_native_snapshot_done = 1;
++    /* The retained instruction-step monitor was armed before leaving the held
++     * pause. It owns the stop after this trap. Queuing a second pause here lets
++     * a restored instruction slip before that new trap is entered. */
++}
++void x64_native_prepare(int *argc, char **argv)
++{
++    const char *enabled = getenv("X64_NATIVE_PIPE");
++    int descriptor;
++    if (!enabled || strcmp(enabled, "1")) return;
++    x64_native_enabled = 1;
++    x64_native_launch_permit_prepare();
++    x64_native_delivery_prepare(x64_native_epoch, x64_native_generation, x64_native_is_stopped());
++    x64_native_audio_host_prepare(argc, argv, x64_native_delivery_runtime(),
++        x64_native_epoch, x64_native_generation, x64_native_is_stopped());
++    x64_native_snapshot_root = getenv("X64_NATIVE_SNAPSHOT_ROOT");
++#ifdef WINDOWS_COMPILE
++    descriptor = _dup(_fileno(stdout));
++    if (descriptor < 0 || _setmode(descriptor, _O_BINARY) < 0 ||
++        _setmode(_fileno(stdin), _O_BINARY) < 0) exit(EXIT_FAILURE);
++    x64_native_output = _fdopen(descriptor, "wb");
++    if (_dup2(_fileno(stderr), _fileno(stdout)) < 0) exit(EXIT_FAILURE);
++#else
++    descriptor = dup(fileno(stdout));
++    x64_native_output = fdopen(descriptor, "wb");
++    if (dup2(fileno(stderr), fileno(stdout)) < 0) exit(EXIT_FAILURE);
++#endif
++    if (!x64_native_output) exit(EXIT_FAILURE);
++    vice_web_started = 1;
++    x64_audio_native_set_enabled(1);
++}
++int x64_native_program_may_apply(void)
++{
++    if (!x64_native_enabled || !x64_native_pending || x64_native_pending_op != 41) return 1;
++    return x64_native_launch_permit_claim(x64_native_pending_permit);
++}
++void x64_native_program_rejected(void)
++{
++    if (!x64_native_enabled || !x64_native_pending || x64_native_pending_op != 41) return;
++    x64_native_pending = 0;
++    x64_native_reply(41, x64_native_pending_request, -7, NULL, 0);
++}
++void x64_native_program_applied(void)
++{
++    if (!x64_native_enabled || !x64_native_pending ||
++        (x64_native_pending_op != 4 && x64_native_pending_op != 41)) return;
++#if defined(ENABLE_PROFILER) && ENABLE_PROFILER
++    {
++        uint32_t info[46];
++        x64_profiler_info(info);
++        /* The Web64 host invalidates capture ownership on program takeover.
++         * Do so only after successful injection: an old capture must never be
++         * returned with this new launch generation's response identity. */
++        vice_web_profiler_control(4, 0, 0, info[6]);
++    }
++#endif
++    x64_native_epoch++;
++    x64_native_generation = x64_native_pending_generation;
++    x64_native_delivery_context(x64_native_epoch, x64_native_generation, x64_native_is_stopped(), 1);
++    x64_native_pending = 0;
++    x64_native_status(x64_native_pending_op, x64_native_pending_request);
++}
++
++#include "x64-native-media-impl.h"
++
++static void x64_native_command(const unsigned char *h, const unsigned char *p, uint32_t n)
++{
++    uint16_t op = (uint16_t)(h[6] | (h[7] << 8));
++    uint64_t request = x64_get64(h + 16), expected = x64_get64(h + 24), generation = x64_get64(h + 32);
++    unsigned char small[184]; int result = 0;
++    /* Hello alone negotiates the process-local epoch; every later command is
++     * conditional on the last acknowledged epoch. No stale launch may mutate. */
++    if (op != 0 && (expected != x64_native_epoch ||
++        (op != 4 && op != 41 && generation != x64_native_generation))) { result = -2; goto failed; }
++    if (x64_native_media_command(op, request, p, n)) return;
++    switch (op) {
++        case 0: case 1: case 7:
++            if (n) break;
++            x64_native_status(op, request); return;
++        case 2:
++            if (n) break;
++            if (vice_web_pause_status()) { x64_native_status(op, request); return; }
++            vice_web_pause(); goto deferred;
++        case 3:
++            if (n) break;
++            x64_native_stop_left();
++            vice_web_resume(); x64_native_status(op, request); return;
++        case 4:
++            if (n < 8 || generation <= x64_native_generation || x64_native_epoch == UINT64_MAX ||
++                x64_get32(p) > 65535 || x64_get32(p + 4) > 65535 || n - 8 > 65536 - x64_get32(p)) break;
++            if (vice_web_run_program((int)x64_get32(p), (int)x64_get32(p + 4), p + 8, (int)n - 8)) break;
++            x64_native_stop_left();
++            goto deferred;
++        case 41:
++            if (n < 16 || generation <= x64_native_generation || x64_native_epoch == UINT64_MAX ||
++                x64_get32(p) > 65535 || x64_get32(p + 4) > 65535 || n - 16 > 65536 - x64_get32(p)) break;
++            if (!x64_native_launch_permit_available()) { result = -4; goto failed; }
++            x64_native_pending_permit = x64_get64(p + 8);
++            if (!x64_native_pending_permit || x64_native_pending_permit > (UINT64_MAX >> 2)) break;
++            if (!x64_native_launch_permit_armed(x64_native_pending_permit)) { result = -7; goto failed; }
++            if (vice_web_run_program((int)x64_get32(p), (int)x64_get32(p + 4), p + 16, (int)n - 16)) break;
++            x64_native_stop_left();
++            goto deferred;
++        case 42: {
++            uint64_t features = UINT64_C(127), bitmap;
++            int delivery = x64_native_delivery_available();
++            int guard = x64_native_launch_permit_available();
++            int snapshots = x64_native_snapshot_root && *x64_native_snapshot_root;
++            unsigned int i;
++            if (n) break;
++            /* Report compiled AND currently granted process capabilities,
++             * rather than advertising an unavailable optional adapter. */
++            bitmap = 0;
++            for (i = 0; i <= 42; ++i) {
++                if (i == 11 || i == 12 || i == 13 || i == 14 || i == 34 || i == 35 || i == 41) continue;
++                bitmap |= UINT64_C(1) << i;
++            }
++            for (i = 51; i <= 63; ++i) bitmap |= UINT64_C(1) << i;
++            if (guard) { features |= UINT64_C(1) << 7; bitmap |= UINT64_C(1) << 41; }
++            if (snapshots) { features |= UINT64_C(1) << 8; bitmap |= (UINT64_C(1) << 34) | (UINT64_C(1) << 35); }
++#if defined(ENABLE_PROFILER) && ENABLE_PROFILER
++            features |= UINT64_C(1) << 9;
++            bitmap |= (UINT64_C(1) << 12) | (UINT64_C(1) << 13) | (UINT64_C(1) << 14);
++#endif
++            if (delivery) features |= (UINT64_C(1) << 10) | (UINT64_C(1) << 11);
++            if (x64_native_audio_host_available()) {
++                features |= UINT64_C(1) << 12; bitmap |= UINT64_C(1) << 43;
++            }
++            features |= (UINT64_C(1) << 13) | (UINT64_C(1) << 14) | (UINT64_C(1) << 15);
++            bitmap |= (UINT64_C(1) << 44) | (UINT64_C(1) << 45) | (UINT64_C(1) << 46) |
++                (UINT64_C(1) << 47) | (UINT64_C(1) << 48);
++            memset(small, 0, 96);
++            x64_put32(small, 1); x64_put32(small + 4, 96); x64_put32(small + 8, 2);
++            x64_put64(small + 16, features);
++            x64_put32(small + 24, 5); x64_put32(small + 28, 1);
++#if defined(ENABLE_PROFILER) && ENABLE_PROFILER
++            x64_put32(small + 32, 3);
++#endif
++            x64_put32(small + 36, 1024); x64_put32(small + 40, 1024);
++            x64_put32(small + 44, delivery ? 3 : 0); x64_put32(small + 48, delivery ? 16384 : 0);
++            x64_put32(small + 52, 2); x64_put32(small + 56, 16 * 1024 * 1024);
++            x64_put64(small + 64, bitmap);
++            x64_put32(small + 80, X64_NATIVE_MAX_INPUT); x64_put32(small + 84, X64_NATIVE_MAX_OUTPUT);
++            x64_native_reply(op, request, 0, small, 96); return;
++        }
++        case 43: case 44: {
++            unsigned char status[192] = {0};
++            uint32_t loader; int32_t error; int control_result = 0;
++            if (op == 43) {
++                if (n != 32 || x64_get32(p) != 1 || x64_get32(p + 4) != 32 ||
++                    x64_get32(p + 20) || x64_get64(p + 24)) break;
++                if (!x64_native_audio_host_available()) { result = -4; goto failed; }
++                control_result = x64_native_audio_host_control(x64_get32(p + 8),
++                    x64_get32(p + 12), x64_get32(p + 16));
++            } else if (n) break;
++            x64_put32(status, 1); x64_put32(status + 4, 192);
++            x64_native_audio_host_status(&loader, &error, status + 16);
++            x64_put32(status + 8, loader); x64_put32(status + 12, (uint32_t)error);
++            if (op == 43) {
++                unsigned char response[196];
++                x64_put32(response, (uint32_t)control_result); memcpy(response + 4, status, sizeof(status));
++                x64_native_reply(op, request, 0, response, sizeof(response));
++            } else x64_native_reply(op, request, 0, status, sizeof(status));
++            return;
++        }
++        case 45: {
++            uint32_t geometry[8]; uint64_t frame, clock; unsigned int i;
++            if (n) break;
++            if (!x64_native_frame_geometry(geometry, &frame, &clock)) { result = -3; goto failed; }
++            memset(small, 0, 64); x64_put32(small, 1); x64_put32(small + 4, 64);
++            for (i = 0; i < 8; ++i) x64_put32(small + 8 + i * 4, geometry[i]);
++            x64_put64(small + 40, frame); x64_put64(small + 48, clock);
++            x64_native_reply(op, request, 0, small, 64); return;
++        }
++        case 46:
++            if (n != 4 || x64_get32(p) > 1) break;
++            vice_web_set_warp_enabled((int)x64_get32(p));
++            x64_native_audio_host_safe_point();
++            x64_native_status(op, request); return;
++        case 47: {
++            double metric; uint64_t bits; unsigned int i;
++            typedef char x64_native_binary64_size[(sizeof(double) == sizeof(uint64_t)) ? 1 : -1];
++            (void)sizeof(x64_native_binary64_size);
++            if (n) break;
++            memset(small, 0, 160);
++            x64_put32(small, 1); x64_put32(small + 4, 160);
++            metric = vice_web_cpu_percent(); memcpy(&bits, &metric, sizeof(bits));
++            x64_put64(small + 8, bits);
++            metric = vice_web_emulated_fps(); memcpy(&bits, &metric, sizeof(bits));
++            x64_put64(small + 16, bits);
++            x64_put32(small + 24, (uint32_t)vice_web_warp_enabled());
++            for (i = 0; i < 4; ++i) {
++                int unit = (int)i + 8; unsigned char *drive = small + 32 + i * 32;
++                x64_put32(drive, (uint32_t)unit);
++                x64_put32(drive + 4, (uint32_t)vice_web_drive_image_attached(unit));
++                x64_put32(drive + 8, (uint32_t)vice_web_drive_led(unit));
++                x64_put32(drive + 12, (uint32_t)vice_web_drive_led2(unit));
++                x64_put32(drive + 16, (uint32_t)vice_web_drive_track(unit));
++                x64_put32(drive + 20, (uint32_t)vice_web_drive_half_track(unit));
++                x64_put32(drive + 24, (uint32_t)vice_web_drive_sector(unit));
++                x64_put32(drive + 28, (uint32_t)vice_web_drive_side(unit));
++            }
++            x64_native_reply(op, request, 0, small, 160); return;
++        }
++        case 48: {
++            const char *name; size_t length;
++            if (n != 4 || x64_get32(p) < 8 || x64_get32(p) > 11) break;
++            name = vice_web_disk_name((int)x64_get32(p));
++            for (length = 0; length <= 4096 && name[length]; ++length) {}
++            if (length > 4096) break;
++            x64_native_reply(op, request, 0, name, length); return;
++        }
++        case 5:
++            if (n || vice_web_frame_step_arm(vice_web_monitor_register_get(0),
++                vice_web_monitor_cpu_mapping(), vice_web_frame_step_epoch()) < 0) break;
++            x64_native_stop_left();
++            goto deferred;
++        case 6: {
++            unsigned char *bytes;
++            if (n != 8 || x64_get32(p) > 65535 || x64_get32(p + 4) > 4096 ||
++                x64_get32(p + 4) > 65536 - x64_get32(p)) break;
++            bytes = vice_web_monitor_memory_read((int)x64_get32(p), (int)x64_get32(p + 4));
++            if (!bytes) break;
++            x64_native_reply(op, request, 0, bytes, x64_get32(p + 4)); return;
++        }
++        case 8: {
++            int w = vice_web_frame_width(), height = vice_web_frame_height();
++            size_t size; unsigned char *copy;
++            if (x64_native_frame_revoked) {
++                if (vice_web_frame_number() == x64_native_frame_floor) { result = -3; goto failed; }
++                x64_native_frame_revoked = 0;
++            }
++            if (n || !vice_web_frame_ready() || w < 1 || height < 1 || w > 2048 || height > 2048) break;
++            size = (size_t)w * height * 4;
++            copy = malloc(size + 16); if (!copy) { result = -5; goto failed; }
++            x64_put32(copy, w); x64_put32(copy + 4, height);
++            x64_put32(copy + 8, (uint32_t)vice_web_frame_number()); x64_put32(copy + 12, (uint32_t)size);
++            memcpy(copy + 16, vice_web_frame_pixels(), size);
++            x64_native_reply(op, request, 0, copy, size + 16); free(copy); return;
++        }
++        case 9: {
++            char name[128]; const char *value;
++            if (!n || n >= sizeof(name) || memchr(p, 0, n)) break;
++            memcpy(name, p, n); name[n] = 0; value = vice_web_get_resource(name);
++            if (!value) break;
++            x64_native_reply(op, request, 0, value, strlen(value)); return;
++        }
++        case 10: {
++            char name[128], value[256]; unsigned int a, b;
++            if (n < 4) break;
++            a = p[0] | (p[1] << 8); b = p[2] | (p[3] << 8);
++            if (!a || a >= sizeof(name) || b >= sizeof(value) || n != 4 + a + b || memchr(p + 4, 0, a + b)) break;
++            memcpy(name, p + 4, a); name[a] = 0; memcpy(value, p + 4 + a, b); value[b] = 0;
++            if (vice_web_set_resource(name, value)) break;
++            x64_native_status(op, request); return;
++        }
++        case 12:
++#if defined(ENABLE_PROFILER) && ENABLE_PROFILER
++            if (n != 16) break;
++            result = vice_web_profiler_control((int)x64_get32(p), (int)x64_get32(p + 4), (int)x64_get32(p + 8), x64_get32(p + 12));
++            x64_put32(small, (uint32_t)result); x64_native_reply(op, request, 0, small, 4); return;
++#else
++            result = -4; goto failed;
++#endif
++        case 13:
++#if defined(ENABLE_PROFILER) && ENABLE_PROFILER
++        {
++            uint32_t info[46]; int i;
++            if (n || !x64_profiler_info(info)) break;
++            for (i = 0; i < 46; i++) x64_put32(small + i * 4, info[i]);
++            x64_native_reply(op, request, 0, small, 184); return;
++        }
++#else
++            result = -4; goto failed;
++#endif
++        case 14:
++#if defined(ENABLE_PROFILER) && ENABLE_PROFILER
++        {
++            const void *bytes; size_t length = 0;
++            if (n != 4) break;
++            bytes = x64_profiler_buffer(x64_get32(p), &length);
++            if (length > X64_NATIVE_MAX_OUTPUT ||
++                (!bytes && !x64_profiler_copy(x64_get32(p), 0, NULL, 0))) break;
++            x64_native_reply(op, request, 0, bytes, length); return;
++        }
++#else
++            result = -4; goto failed;
++#endif
++        case 15:
++            if (n) break;
++            x64_native_audio_host_request_stop(); goto deferred;
++        case 16: {
++            size_t samples, i; int16_t *pcm; unsigned char *copy;
++            if (n) break;
++            samples = x64_audio_native_queued();
++            if (samples > 48000 * 2) break;
++            copy = malloc(24 + samples * 2); pcm = malloc(samples * sizeof(*pcm) + 1);
++            if (!copy || !pcm) { free(copy); free(pcm); result = -5; goto failed; }
++            samples = x64_audio_native_copy(pcm, samples);
++            x64_put32(copy, x64_audio_native_sample_rate()); x64_put32(copy + 4, x64_audio_native_channels());
++            x64_put32(copy + 8, (uint32_t)samples); x64_put32(copy + 12, 0);
++            x64_put64(copy + 16, x64_audio_native_overruns());
++            for (i = 0; i < samples; i++) { copy[24 + i * 2] = (unsigned char)pcm[i]; copy[25 + i * 2] = (unsigned char)((uint16_t)pcm[i] >> 8); }
++            x64_native_reply(op, request, 0, copy, 24 + samples * 2); free(pcm); free(copy); return;
++        }
++        case 36:
++            if (n) break;
++            x64_audio_native_reset();
++            x64_native_reply(op, request, 0, NULL, 0); return;
++        case 37:
++            if (n != 4 || x64_get32(p) > 1 || x64_native_epoch == UINT64_MAX) break;
++            x64_native_stop_left();
++            vice_web_reset((int)x64_get32(p));
++            goto deferred;
++        case 38: {
++            uint32_t a, b, c; char *strings; const char *type, *code, *value;
++            if (n < 20) break;
++            a = x64_get32(p); b = x64_get32(p + 4); c = x64_get32(p + 8);
++            if (a > 64 || b > 256 || c > 65536 || n != 20 + a + b + c || x64_get32(p + 12) > 1) break;
++            strings = malloc((size_t)a + b + c + 3);
++            if (!strings) { result = -5; goto failed; }
++            type = strings; code = strings + a + 1; value = strings + a + b + 2;
++            memcpy(strings, p + 20, a); strings[a] = 0;
++            memcpy(strings + a + 1, p + 20 + a, b); strings[a + b + 1] = 0;
++            memcpy(strings + a + b + 2, p + 20 + a + b, c); strings[a + b + c + 2] = 0;
++            result = vice_web_write_input(type, code, (int)x64_get32(p + 12),
++                (int)(int32_t)x64_get32(p + 16), value);
++            free(strings); goto integer_result;
++        }
++        case 39: {
++            char *text;
++            if (n > 65536) break;
++            text = malloc((size_t)n + 1); if (!text) { result = -5; goto failed; }
++            memcpy(text, p, n); text[n] = 0;
++            result = vice_web_paste_text(text); free(text); goto integer_result;
++        }
++        case 40: {
++            int i;
++            if (n) break;
++            for (i = 0; i < 16; ++i) x64_put32(small + i * 4, (uint32_t)vice_web_keyboard_row(i));
++            x64_put32(small + 64, (uint32_t)vice_web_joystick_value(1));
++            x64_put32(small + 68, (uint32_t)vice_web_joystick_value(2));
++            x64_native_reply(op, request, 0, small, 72); return;
++        }
++        case 17:
++            if (n || vice_web_monitor_step_instruction() < 0) break;
++            x64_native_stop_left();
++            goto deferred;
++        case 18:
++            if (n || !x64_native_is_stopped()) { result = -3; goto failed; }
++            if (!x64_native_stop || x64_native_stop_mapping != vice_web_monitor_cpu_mapping() ||
++                x64_native_stop_mutation != (uint32_t)vice_web_monitor_mutation_generation())
++                x64_native_stop_entered();
++            x64_native_status(op, request); return;
++        case 19: {
++            unsigned char bytes[4096]; uint32_t ranges, i, total = 0;
++            if (n < 20 || !x64_native_stop_matches(p)) { result = -3; goto failed; }
++            ranges = x64_get32(p + 16);
++            if (ranges < 1 || ranges > 64 || n != 20 + ranges * 8) break;
++            for (i = 0; i < ranges; ++i) {
++                uint32_t address = x64_get32(p + 20 + i * 8), length = x64_get32(p + 24 + i * 8);
++                if (address > 65535 || !length || length > 4096 - total || length > 65536 - address) goto failed;
++                total += length;
++            }
++            total = 0;
++            for (i = 0; i < ranges; ++i) {
++                uint32_t address = x64_get32(p + 20 + i * 8), length = x64_get32(p + 24 + i * 8);
++                memcpy(bytes + total, vice_web_monitor_memory_read((int)address, (int)length), length);
++                total += length;
++            }
++            x64_native_reply(op, request, 0, bytes, total); return;
++        }
++        case 20: {
++            uint32_t address, length, indirect, cell;
++            if (n != 44) break;
++            if (!x64_native_stop_matches(p)) { result = -3; goto failed; }
++            address = x64_get32(p + 16); length = x64_get32(p + 20);
++            indirect = x64_get32(p + 24); cell = x64_get32(p + 28);
++            if (length < 1 || length > 4 || address > 65536 - length || indirect > 1 || p[42] || p[43]) break;
++            /* Match the Web64 runtime's preflight: no commit boundary entered
++             * for unproven RAM or a changed pointer cell. Keep that stop valid. */
++            if (!vice_web_monitor_ram_visible((int)address, (int)length)) result = -4;
++            else if (indirect && (cell > 65534 || !vice_web_monitor_ram_visible((int)cell, 2))) result = -4;
++            else if (indirect && memcmp(vice_web_monitor_memory_read((int)cell, 2), p + 40, 2)) result = -5;
++            else {
++                result = vice_web_monitor_mutate_memory((int)address, p + 32, p + 36, (int)length,
++                    (int)x64_get32(p + 8), (int)x64_get32(p + 12));
++                /* Every ENTERED native boundary revokes observation/capture,
++                 * including a rejection or uncertain readback result (-6). */
++                x64_native_stop_left(); x64_native_invalidate_profile();
++            }
++            x64_native_result(op, request, result); return;
++        }
++        case 21:
++            if (n != 28) break;
++            if (!x64_native_stop_matches(p)) { result = -3; goto failed; }
++            result = vice_web_monitor_mutate_register((int)x64_get32(p + 16), (int)x64_get32(p + 20),
++                (int)x64_get32(p + 24), (int)x64_get32(p + 8), (int)x64_get32(p + 12));
++            x64_native_stop_left(); x64_native_invalidate_profile();
++            x64_native_result(op, request, result); return;
++        case 22:
++            if (n != 8 || x64_get32(p) > 65535 || x64_get32(p + 4) > 1) break;
++            result = vice_web_monitor_breakpoint_set((int)x64_get32(p), (int)x64_get32(p + 4)); goto integer_result;
++        case 23:
++            if (n != 4 || x64_get32(p) > 65535) break;
++            result = vice_web_monitor_breakpoint_clear((int)x64_get32(p)); goto integer_result;
++        case 24: {
++            uint32_t length;
++            if (n < 16) break;
++            length = x64_get32(p + 12);
++            if (length < 1 || length > 8 || n != 16 + length) break;
++            result = vice_web_monitor_breakpoint_guard_set((int)x64_get32(p), (int)x64_get32(p + 4),
++                (int)x64_get32(p + 8), p + 16, (int)length); goto integer_result;
++        }
++        case 25:
++            if (n != 4) break;
++            result = vice_web_monitor_breakpoint_guard_clear((int)x64_get32(p)); goto integer_result;
++        case 26: {
++            int program[VICE_WEB_MONITOR_PROGRAM_LIMIT * 2]; uint32_t bytes, count, i;
++            if (n < 20) break;
++            bytes = x64_get32(p + 12); count = x64_get32(p + 16);
++            if (bytes > 8 || count > VICE_WEB_MONITOR_PROGRAM_LIMIT || n != 20 + bytes + count * 8) break;
++            for (i = 0; i < count * 2; ++i) program[i] = (int)(int32_t)x64_get32(p + 20 + bytes + i * 4);
++            result = vice_web_monitor_owner_set((int)x64_get32(p), (int)x64_get32(p + 4),
++                (int)x64_get32(p + 8), p + 20, (int)bytes, program, (int)count); goto integer_result;
++        }
++        case 27:
++            if (n != 4) break;
++            result = vice_web_monitor_owner_clear((int)x64_get32(p)); goto integer_result;
++        case 28: {
++            unsigned char info[32 + VICE_WEB_MONITOR_OWNERS * 4]; int count, i;
++            if (n) break;
++            x64_put32(info, (uint32_t)vice_web_monitor_breakpoint_hit_pending());
++            x64_put32(info + 4, (uint32_t)vice_web_monitor_breakpoint_hit_address());
++            x64_put32(info + 8, (uint32_t)vice_web_monitor_breakpoint_hit_memspace());
++            x64_put32(info + 12, (uint32_t)vice_web_monitor_breakpoint_hit_mapping());
++            x64_put32(info + 16, (uint32_t)vice_web_monitor_breakpoint_hit_kind());
++            x64_put32(info + 20, (uint32_t)vice_web_monitor_breakpoint_hit_checkpoint_id());
++            x64_put32(info + 24, (uint32_t)vice_web_monitor_breakpoint_hit_guard_id());
++            count = vice_web_monitor_owner_match_count();
++            if (count < 0 || count > VICE_WEB_MONITOR_OWNERS) break;
++            x64_put32(info + 28, (uint32_t)count);
++            for (i = 0; i < count; ++i) x64_put32(info + 32 + i * 4, (uint32_t)vice_web_monitor_owner_match_id(i));
++            x64_native_reply(op, request, 0, info, 32 + count * 4); return;
++        }
++        case 29:
++            if (n != 4) break;
++            result = vice_web_monitor_owner_unavailable_count((int)x64_get32(p)); goto integer_result;
++        case 30:
++            if (n != 20) break;
++            if (!x64_native_stop_matches(p)) { result = -3; goto failed; }
++            if (x64_get32(p + 16) > 65535 || vice_web_monitor_breakpoint_step_past((int)x64_get32(p + 16)) < 0) break;
++            x64_native_stop_left(); goto deferred;
++        case 31: {
++            const char *text;
++            if (n != 24) break;
++            if (!x64_native_stop_matches(p)) { result = -3; goto failed; }
++            if (x64_get32(p + 16) > 65535 || x64_get32(p + 20) > INT_MAX) break;
++            text = vice_web_monitor_disassemble((int)x64_get32(p + 16), (int)x64_get32(p + 20));
++            x64_native_reply(op, request, 0, text, strlen(text)); return;
++        }
++        case 32:
++            if (n != 24) break;
++            if (!x64_native_stop_matches(p)) { result = -3; goto failed; }
++            result = vice_web_monitor_ram_visible((int)x64_get32(p + 16), (int)x64_get32(p + 20)); goto integer_result;
++        case 33:
++            if (n) break;
++            result = vice_web_monitor_breakpoint_hit_clear(); goto integer_result;
++        case 34: case 35: {
++            char filename[1024]; uint32_t i; int size;
++            if (!x64_native_snapshot_root || !*x64_native_snapshot_root) { result = -4; goto failed; }
++            if (!x64_native_is_stopped()) { result = -3; goto failed; }
++            if (vice_web_snapshot_pending() || vice_web_monitor_step_past_address >= 0 ||
++                vice_web_monitor_instruction_step_pending ||
++                (vice_web_monitor_breakpoint_hit_pending_flag && vice_web_monitor_breakpoint_hit_kind_value == 1)) break;
++            if (!n || n > 128 || p[0] == '.') break;
++            for (i = 0; i < n; ++i) {
++                unsigned char c = p[i];
++                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
++                    (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.')) break;
++            }
++            if (i != n || x64_native_epoch == UINT64_MAX) break;
++#ifdef WINDOWS_COMPILE
++            size = snprintf(filename, sizeof(filename), "%s\\%.*s", x64_native_snapshot_root, (int)n, (const char *)p);
++#else
++            size = snprintf(filename, sizeof(filename), "%s/%.*s", x64_native_snapshot_root, (int)n, (const char *)p);
++#endif
++            if (size < 0 || size >= (int)sizeof(filename)) break;
++            result = op == 34 ? vice_web_save_snapshot(filename) : vice_web_load_snapshot(filename);
++            if (result < 0) { x64_native_result(op, request, result); return; }
++            x64_native_snapshot_done = 0; x64_native_stop_left();
++            /* Match the retained Source harness: the instruction-step request
++             * releases the old pause so the snapshot trap can run, then stops
++             * at its monitor boundary. A load restores the serialized boundary;
++             * it must not execute an extra instruction before acknowledgment. */
++            if (vice_web_monitor_step_instruction() < 0) exit(EXIT_FAILURE);
++            goto deferred;
++        }
++        default: result = -4; goto failed;
++    }
++    result = -1;
++failed:
++    if (!result) result = -1;
++    x64_native_reply(op, request, result, NULL, 0); return;
++integer_result:
++    x64_put32(small, (uint32_t)result); x64_native_reply(op, request, 0, small, 4); return;
++deferred:
++    x64_native_pending = 1; x64_native_pending_op = op;
++    x64_native_pending_request = request; x64_native_pending_generation = generation;
++}
++
++void x64_native_pump(void)
++{
++    size_t wanted; int count;
++    if (!x64_native_enabled) return;
++    x64_native_delivery_poll();
++    if (x64_native_pending) {
++        if (x64_native_pending_op == 15) {
++            if (!x64_native_audio_host_shutdown_complete()) return;
++            x64_native_pending = 0;
++            x64_native_reply(15, x64_native_pending_request, 0, NULL, 0); exit(EXIT_SUCCESS);
++        } else if ((x64_native_pending_op == 34 || x64_native_pending_op == 35) &&
++            x64_native_snapshot_done && x64_native_is_stopped()) {
++            x64_native_pending = 0;
++            x64_native_result(x64_native_pending_op, x64_native_pending_request, x64_native_snapshot_result);
++        } else if (x64_native_pending_op != 4 && x64_native_pending_op != 41 && x64_native_pending_op != 37 && x64_native_pending_op != 34 &&
++            x64_native_pending_op != 35 && x64_native_is_stopped()) {
++            x64_native_pending = 0; x64_native_status(x64_native_pending_op, x64_native_pending_request);
++        } else return;
++    }
++    wanted = x64_native_received < X64_NATIVE_HEADER ? X64_NATIVE_HEADER :
++        X64_NATIVE_HEADER + x64_get32(x64_native_input + 8);
++    if (wanted > sizeof(x64_native_input)) exit(EXIT_FAILURE);
++    if (wanted > x64_native_received) {
++#ifdef WINDOWS_COMPILE
++        DWORD available = 0; HANDLE input = (HANDLE)_get_osfhandle(_fileno(stdin));
++        if (!PeekNamedPipe(input, NULL, 0, NULL, &available, NULL)) exit(EXIT_FAILURE);
++        if (!available) return;
++        if (available > wanted - x64_native_received) available = (DWORD)(wanted - x64_native_received);
++        count = _read(_fileno(stdin), x64_native_input + x64_native_received, available);
++#else
++        struct pollfd input = { 0, POLLIN, 0 };
++        if (poll(&input, 1, 0) <= 0) return;
++        count = (int)read(0, x64_native_input + x64_native_received, wanted - x64_native_received);
++#endif
++        if (count <= 0) exit(EXIT_FAILURE);
++        x64_native_received += (size_t)count;
++        if (x64_native_received < X64_NATIVE_HEADER) return;
++        if (memcmp(x64_native_input, "X64V\2\0", 6) || x64_get32(x64_native_input + 12) != 0 ||
++            x64_get32(x64_native_input + 8) > X64_NATIVE_MAX_INPUT) exit(EXIT_FAILURE);
++        wanted = X64_NATIVE_HEADER + x64_get32(x64_native_input + 8);
++        if (x64_native_received < wanted) return;
++    }
++    x64_native_command(x64_native_input, x64_native_input + X64_NATIVE_HEADER, (uint32_t)(wanted - X64_NATIVE_HEADER));
++    x64_native_received = 0;
++}
+--- /dev/null
++++ b/src/arch/headless/x64-native-host.h
+@@ -0,0 +1,16 @@
++/* x64-owned native transport. GPL-2.0-or-later, like the retained VICE host.
++ * All command application and response copying happens on the VICE core thread.
++ * The stdin/stdout pipes are private to the same-release supervisor, not a CLI.
++ */
++#ifndef X64_NATIVE_HOST_H
++#define X64_NATIVE_HOST_H
++void x64_native_prepare(int *argc, char **argv);
++void x64_native_pump(void);
++void x64_native_program_applied(void);
++int x64_native_program_may_apply(void);
++void x64_native_program_rejected(void);
++void x64_native_stop_entered(void);
++void x64_native_stop_left(void);
++void x64_native_snapshot_applied(int operation, int result);
++void x64_native_reset_applied(void);
++#endif
+--- /dev/null
++++ b/src/arch/headless/x64-native-launch-permit.h
+@@ -0,0 +1,93 @@
++/* x64-owned native launch authorization. GPL-2.0-or-later, like VICE.
++ * This paging-file mapping contains no project bytes and creates no host file.
++ * The core thread claims a ticket exactly once, immediately before injection.
++ * Revocation after that claim cannot interrupt or partially apply the program.
++ */
++#ifndef X64_NATIVE_LAUNCH_PERMIT_H
++#define X64_NATIVE_LAUNCH_PERMIT_H
++#include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
++#ifdef WINDOWS_COMPILE
++#include <windows.h>
++static unsigned char *x64_native_launch_permit_view;
++
++static int x64_native_launch_permit_metadata(void)
++{
++    static const unsigned char prefix[24] = {
++        'X','6','4','L','C','H','0','1', 1,0,0,0, 32,0,0,0,
++        0,0,0,0,0,0,0,0
++    };
++    return x64_native_launch_permit_view &&
++        !memcmp(x64_native_launch_permit_view, prefix, sizeof(prefix));
++}
++#endif
++
++static void x64_native_launch_permit_prepare(void)
++{
++#ifdef WINDOWS_COMPILE
++    const char *name = getenv("X64_NATIVE_LAUNCH_PERMIT");
++    HANDLE mapping;
++    const unsigned char *p;
++    /* The same-release host uses an ASCII Local\\X64Launch-... name. Do not
++     * silently reinterpret malformed input or fall back to an on-disk file. */
++    if (!name || !*name) return;
++    for (p = (const unsigned char *)name; *p; ++p) {
++        if (*p < 32 || *p > 126) return;
++    }
++    mapping = OpenFileMappingA(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, name);
++    if (!mapping) return;
++    x64_native_launch_permit_view = (unsigned char *)MapViewOfFile(
++        mapping, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, 32);
++    CloseHandle(mapping);
++    if (!x64_native_launch_permit_metadata()) {
++        if (x64_native_launch_permit_view) UnmapViewOfFile(x64_native_launch_permit_view);
++        x64_native_launch_permit_view = NULL;
++    }
++#endif
++}
++
++static int x64_native_launch_permit_available(void)
++{
++#ifdef WINDOWS_COMPILE
++    return x64_native_launch_permit_metadata();
++#else
++    return 0;
++#endif
++}
++
++static int x64_native_launch_permit_armed(uint64_t serial)
++{
++#ifdef WINDOWS_COMPILE
++    volatile LONG64 *word;
++    if (!serial || serial > (UINT64_MAX >> 2) ||
++        !x64_native_launch_permit_available()) return 0;
++    word = (volatile LONG64 *)(x64_native_launch_permit_view + 24);
++    /* Admission can avoid known-stale dispatch side effects, but it does NOT
++     * authorize application: the trap must still win the separate claim. */
++    return (uint64_t)InterlockedCompareExchange64(word, 0, 0) == ((serial << 2) | 1);
++#else
++    (void)serial;
++    return 0;
++#endif
++}
++
++static int x64_native_launch_permit_claim(uint64_t serial)
++{
++#ifdef WINDOWS_COMPILE
++    uint64_t armed, claimed;
++    volatile LONG64 *word;
++    if (!serial || serial > (UINT64_MAX >> 2) ||
++        !x64_native_launch_permit_available()) return 0;
++    word = (volatile LONG64 *)(x64_native_launch_permit_view + 24);
++    armed = (serial << 2) | 1; claimed = (serial << 2) | 2;
++    /* Windows mappings are page aligned, so the offset-24 atomic is aligned.
++     * Interlocked CAS is the linearization point shared with host revocation. */
++    return (uint64_t)InterlockedCompareExchange64(word, (LONG64)claimed,
++        (LONG64)armed) == armed;
++#else
++    (void)serial;
++    return 0; /* Guarded launch is not qualified on this platform. */
++#endif
++}
++#endif
+--- /dev/null
++++ b/src/arch/headless/x64-native-media-impl.h
+@@ -0,0 +1,559 @@
++/* x64-owned resident-media commands for the retained Web64 VICE APIs.
++ * GPL-2.0-or-later. Included after x64-native-host's helpers, before dispatch.
++ * No pathname enters the wire; every VICE filename below belongs to the
++ * bounded memory-file registry. Uploads remain immutable, while mounted media
++ * use separately pinned private working copies. All work is core-thread only.
++ */
++#ifndef X64_NATIVE_MEDIA_IMPL_H
++#define X64_NATIVE_MEDIA_IMPL_H
++#include "x64-memory-file.h"
++#include "crt.h"
++#include "lib.h"
++
++static uint64_t x64_native_media_disks[4];
++static uint64_t x64_native_media_cartridge;
++static uint64_t x64_native_media_reu;
++enum { X64_MEDIA_CART_OWNER = 4, X64_MEDIA_REU_OWNER = 5 };
++/* One owned pin per identity. A failed retained rollback can leave either
++ * filename authoritative, so keep both identities indexed until an explicit
++ * successful cleanup of their owning device proves they can be retired. */
++static struct {
++    uint64_t id;
++    uint32_t owners;
++} x64_native_media_quarantine[X64_MEMORY_FILE_MAX_BLOBS];
++
++static void x64_native_media_descriptor(unsigned char out[28], const x64_memory_blob_info *info)
++{
++    x64_put64(out, info->id);
++    x64_put32(out + 8, info->length);
++    x64_put32(out + 12, info->crc32);
++    x64_put32(out + 16, info->kind);
++    x64_put32(out + 20, info->sealed);
++    x64_put32(out + 24, info->received);
++}
++
++static int x64_native_media_describe(uint64_t id, unsigned char out[28])
++{
++    x64_memory_blob_info info;
++    int result = x64_memory_blob_describe(id, &info);
++    if (!result) x64_native_media_descriptor(out, &info);
++    return result;
++}
++
++static int x64_native_media_kind(uint64_t id, uint32_t kind, x64_memory_blob_info *info)
++{
++    int result = x64_memory_blob_describe(id, info);
++    if (result) return result;
++    if (!info->sealed || !info->length || info->received != info->length || info->kind != kind)
++        return X64_MEMORY_INVALID;
++    return 0;
++}
++
++static int x64_native_media_path_matches(uint64_t id, const char *actual)
++{
++    char path[X64_MEMORY_FILE_PATH_BYTES];
++    return id && actual && !x64_memory_blob_path(id, path, sizeof(path)) &&
++        x64_memory_file_equal(path, actual);
++}
++
++static void x64_native_media_hold(uint64_t id, unsigned int owner)
++{
++    unsigned int i, empty = X64_MEMORY_FILE_MAX_BLOBS;
++    if (!id) return;
++    for (i = 0; i < X64_MEMORY_FILE_MAX_BLOBS; i++) {
++        if (x64_native_media_quarantine[i].id == id) {
++            x64_native_media_quarantine[i].owners |= 1u << owner;
++            return;
++        }
++        if (!x64_native_media_quarantine[i].id) empty = i;
++    }
++    /* Every indexed identity owns a pin in the same max-64-entry registry.
++     * A new live identity cannot coexist with 64 other pinned identities. */
++    if (empty == X64_MEMORY_FILE_MAX_BLOBS) exit(EXIT_FAILURE);
++    x64_native_media_quarantine[empty].id = id;
++    x64_native_media_quarantine[empty].owners = 1u << owner;
++}
++
++static void x64_native_media_forget(uint64_t id)
++{
++    unsigned int i;
++    for (i = 0; i < X64_MEMORY_FILE_MAX_BLOBS; i++) {
++        if (x64_native_media_quarantine[i].id == id) {
++            x64_native_media_quarantine[i].id = 0;
++            x64_native_media_quarantine[i].owners = 0;
++        }
++    }
++}
++
++static uint64_t x64_native_media_binding(uint64_t primary, const char *actual)
++{
++    unsigned int i;
++    if (x64_native_media_path_matches(primary, actual)) return primary;
++    for (i = 0; i < X64_MEMORY_FILE_MAX_BLOBS; i++) {
++        uint64_t id = x64_native_media_quarantine[i].id;
++        if (x64_native_media_path_matches(id, actual)) return id;
++    }
++    return 0;
++}
++
++static int x64_native_media_referenced(uint64_t id)
++{
++    unsigned int unit;
++    for (unit = 8; unit <= 11; unit++)
++        if (x64_native_media_path_matches(id, file_system_get_disk_name(unit, 0))) return 1;
++    return x64_native_media_path_matches(id, cartridge_get_filename_by_slot(0)) ||
++        x64_native_media_path_matches(id, reu_get_file_name());
++}
++
++/* Retire only after the retained detach/save path has completed. Restore the
++ * owned pin if an unexpected stream prevents drop, and retain its owner tag. */
++static int x64_native_media_release(uint64_t id, unsigned int owner)
++{
++    int result;
++    if (!id) return 0;
++    result = x64_memory_blob_unpin(id);
++    if (result == X64_MEMORY_NOT_FOUND) { x64_native_media_forget(id); return 0; }
++    if (!result) result = x64_memory_blob_drop(id);
++    if (!result) { x64_native_media_forget(id); return 0; }
++    /* A failed unpin means the owned-pin invariant is uncertain. Re-establish
++     * a pin before retaining the identity; never forward it to the filesystem. */
++    if (x64_memory_blob_pin(id)) exit(EXIT_FAILURE);
++    x64_native_media_hold(id, owner);
++    return result;
++}
++
++/* The caller must first prove successful cleanup of this device. Merely
++ * observing absent names after an uncertain attach is not that proof. Other
++ * device names and retained stream references still veto release. */
++static int x64_native_media_collect(unsigned int owner)
++{
++    unsigned int i;
++    int result = 0;
++    for (i = 0; i < X64_MEMORY_FILE_MAX_BLOBS; i++) {
++        uint64_t id = x64_native_media_quarantine[i].id;
++        if (!id || !(x64_native_media_quarantine[i].owners & (1u << owner))) continue;
++        if (x64_native_media_referenced(id) || x64_native_media_release(id, owner)) result = -6;
++    }
++    return result;
++}
++
++static int x64_native_media_clone(uint64_t input, uint32_t kind, uint64_t *out,
++                                  char path[X64_MEMORY_FILE_PATH_BYTES])
++{
++    x64_memory_blob_info info;
++    uint64_t id = 0;
++    int result = x64_native_media_kind(input, kind, &info);
++    if (!result) result = x64_memory_blob_clone(input, &id);
++    if (!result) result = x64_memory_blob_pin(id);
++    if (!result) result = x64_memory_blob_path(id, path, X64_MEMORY_FILE_PATH_BYTES);
++    if (result) {
++        if (id) {
++            x64_memory_blob_unpin(id);
++            x64_memory_blob_drop(id);
++        }
++        return result;
++    }
++    *out = id;
++    return 0;
++}
++
++static int x64_native_media_reu_capacity(uint32_t kib)
++{
++    return kib == 128 || kib == 256 || kib == 512 || kib == 1024 || kib == 2048 ||
++        kib == 4096 || kib == 8192 || kib == 16384;
++}
++
++/* Uses the Source's nonmutating live-RAM export, into a private memory-backed
++ * output. Publication creates a separate complete immutable registry entry. */
++static int x64_native_media_capture_reu(uint64_t *out)
++{
++    uint64_t temporary = 0, captured = 0;
++    char path[X64_MEMORY_FILE_PATH_BYTES];
++    x64_memory_blob_info info;
++    int capacity = 0, result;
++    if (!reu_cart_enabled() || resources_get_int("REUsize", &capacity) < 0 ||
++        !x64_native_media_reu_capacity((uint32_t)capacity)) return -1;
++    result = x64_memory_blob_output(X64_MEMORY_REU, &temporary);
++    if (!result) result = x64_memory_blob_path(temporary, path, sizeof(path));
++    if (!result) result = vice_web_reu_export(path);
++    if (!result) result = x64_memory_blob_describe(temporary, &info);
++    if (!result && info.length != (uint32_t)capacity * 1024u) result = -1;
++    if (!result) result = x64_memory_blob_capture(temporary, &captured);
++    if (temporary) {
++        int released = x64_memory_blob_drop(temporary);
++        if (!result && released) result = released;
++    }
++    if (result) {
++        if (captured) x64_memory_blob_drop(captured);
++        return result;
++    }
++    *out = captured;
++    return 0;
++}
++
++static int x64_native_media_same_bytes(uint64_t left, uint64_t right)
++{
++    x64_memory_blob_info a, b;
++    unsigned char first[4096], second[4096];
++    uint32_t offset = 0;
++    if (x64_memory_blob_describe(left, &a) || x64_memory_blob_describe(right, &b) ||
++        a.length != b.length) return 0;
++    while (offset < a.length) {
++        uint32_t size = a.length - offset;
++        if (size > sizeof(first)) size = sizeof(first);
++        if (x64_memory_blob_read(left, offset, first, size) ||
++            x64_memory_blob_read(right, offset, second, size) || memcmp(first, second, size)) return 0;
++        offset += size;
++    }
++    return 1;
++}
++
++static int x64_native_media_disk_attach(uint32_t unit, uint64_t input, int *entered)
++{
++    uint64_t candidate = 0;
++    uint64_t primary = x64_native_media_disks[unit - 8];
++    uint64_t previous = x64_native_media_binding(primary, file_system_get_disk_name(unit, 0));
++    char path[X64_MEMORY_FILE_PATH_BYTES], old_path[X64_MEMORY_FILE_PATH_BYTES];
++    int result = x64_native_media_clone(input, X64_MEMORY_D64, &candidate, path);
++    if (result) return result;
++    *entered = 1;
++    x64_native_stop_left();
++    result = vice_web_attach_disk((int)unit, path);
++    if (!result && x64_native_media_path_matches(candidate, file_system_get_disk_name(unit, 0))) {
++        x64_native_media_disks[unit - 8] = candidate;
++        if (primary && primary != previous) x64_native_media_hold(primary, unit - 8);
++        if (x64_native_media_release(previous, unit - 8)) return -6;
++        return 0;
++    }
++    /* The Source probes before replacing, but a later drive-attach failure can
++     * already have detached the previous image. Restore only an owned backing. */
++    if (previous && !x64_native_media_path_matches(previous, file_system_get_disk_name(unit, 0))) {
++        if (x64_memory_blob_path(previous, old_path, sizeof(old_path)) ||
++            vice_web_attach_disk((int)unit, old_path) ||
++            !x64_native_media_path_matches(previous, file_system_get_disk_name(unit, 0))) {
++            x64_native_media_hold(primary, unit - 8);
++            x64_native_media_hold(previous, unit - 8);
++            x64_native_media_disks[unit - 8] = candidate;
++            return -6;
++        }
++    }
++    if (x64_native_media_path_matches(candidate, file_system_get_disk_name(unit, 0))) {
++        x64_native_media_hold(primary, unit - 8);
++        x64_native_media_hold(previous, unit - 8);
++        x64_native_media_disks[unit - 8] = candidate;
++        return -6;
++    }
++    if (x64_native_media_release(candidate, unit - 8)) return -6;
++    return result ? result : -1;
++}
++
++static int x64_native_media_disk_detach(uint32_t unit)
++{
++    uint64_t previous = x64_native_media_disks[unit - 8];
++    x64_native_stop_left();
++    vice_web_detach_disk((int)unit);
++    if ((file_system_get_disk_name(unit, 0) && *file_system_get_disk_name(unit, 0)) ||
++        vice_web_drive_image_attached((int)unit)) return -6;
++    x64_native_media_disks[unit - 8] = 0;
++    if (x64_native_media_referenced(previous)) x64_native_media_hold(previous, unit - 8);
++    else if (x64_native_media_release(previous, unit - 8)) return -6;
++    return x64_native_media_collect(unit - 8);
++}
++
++static int x64_native_media_capture_disk(uint32_t unit, uint64_t *out)
++{
++    uint64_t id = x64_native_media_binding(x64_native_media_disks[unit - 8], file_system_get_disk_name(unit, 0));
++    uint64_t captured = 0;
++    char path[X64_MEMORY_FILE_PATH_BYTES];
++    int result;
++    if (!x64_native_media_path_matches(id, file_system_get_disk_name(unit, 0)) ||
++        x64_memory_blob_path(id, path, sizeof(path))) return -1;
++    /* Match the Source fallback: detach writes dirty GCR sectors, then copy and
++     * reattach on this same core-thread turn, with no intervening instruction. */
++    x64_native_stop_left();
++    vice_web_detach_disk((int)unit);
++    if (file_system_get_disk_name(unit, 0) && *file_system_get_disk_name(unit, 0)) return -6;
++    result = x64_memory_blob_capture(id, &captured);
++    if (vice_web_attach_disk((int)unit, path) ||
++        !x64_native_media_path_matches(id, file_system_get_disk_name(unit, 0))) {
++        if (captured) x64_memory_blob_drop(captured);
++        return -6;
++    }
++    if (result) return result;
++    *out = captured;
++    return 0;
++}
++
++static int x64_native_media_cartridge_attach(uint64_t input, int *entered)
++{
++    uint64_t candidate = 0, primary = x64_native_media_cartridge;
++    uint64_t previous = x64_native_media_binding(primary, cartridge_get_filename_by_slot(0));
++    char path[X64_MEMORY_FILE_PATH_BYTES], old_path[X64_MEMORY_FILE_PATH_BYTES];
++    int previous_type = vice_web_cartridge_id();
++    int header_type;
++    int result = x64_native_media_clone(input, X64_MEMORY_CRT, &candidate, path);
++    if (result) return result;
++    /* Header validation uses the retained CRT parser; its chip loaders below
++     * remain the semantic authority, including family-specific validation. */
++    header_type = crt_getid(path);
++    /* Admission matches the four frozen Web64 mastering profiles: generic
++     * 8K/16K (header type 0), Magic Desk (19), and EasyFlash (32). Their
++     * retained loaders are the qualified resident-FILE translation units. */
++    if (header_type != 0 && header_type != 19 && header_type != 32) {
++        x64_native_media_release(candidate, X64_MEDIA_CART_OWNER);
++        return -1;
++    }
++    *entered = 1;
++    x64_native_stop_left();
++    x64_native_invalidate_profile();
++    result = vice_web_attach_cartridge(path);
++    if (!result && x64_native_media_path_matches(candidate, cartridge_get_filename_by_slot(0))) {
++        x64_native_media_cartridge = candidate;
++        if (primary && primary != previous) x64_native_media_hold(primary, X64_MEDIA_CART_OWNER);
++        if (x64_native_media_release(previous, X64_MEDIA_CART_OWNER)) return -6;
++        return 0;
++    }
++    /* Retained cartridge_attach_image may detach before reading all CHIP
++     * records. Attempt a real retained reattach of the previous owned image. */
++    if (previous) {
++        if (x64_memory_blob_path(previous, old_path, sizeof(old_path)) ||
++            vice_web_attach_cartridge(old_path) ||
++            !x64_native_media_path_matches(previous, cartridge_get_filename_by_slot(0))) {
++            x64_native_media_hold(primary, X64_MEDIA_CART_OWNER);
++            x64_native_media_hold(previous, X64_MEDIA_CART_OWNER);
++            x64_native_media_cartridge = candidate;
++            return -6;
++        }
++    } else if (previous_type != CARTRIDGE_NONE) {
++        x64_native_media_hold(primary, X64_MEDIA_CART_OWNER);
++        x64_native_media_cartridge = candidate;
++        return -6;
++    } else if (vice_web_detach_cartridge() || vice_web_cartridge_id() != CARTRIDGE_NONE) {
++        x64_native_media_hold(primary, X64_MEDIA_CART_OWNER);
++        x64_native_media_cartridge = candidate;
++        return -6;
++    }
++    if (x64_native_media_release(candidate, X64_MEDIA_CART_OWNER)) return -6;
++    return result ? result : -1;
++}
++
++static int x64_native_media_cartridge_detach(void)
++{
++    uint64_t previous = x64_native_media_cartridge;
++    int result;
++    x64_native_stop_left();
++    x64_native_invalidate_profile();
++    result = vice_web_detach_cartridge();
++    if (result || vice_web_cartridge_id() != CARTRIDGE_NONE) return -6;
++    x64_native_media_cartridge = 0;
++    if (x64_native_media_referenced(previous)) x64_native_media_hold(previous, X64_MEDIA_CART_OWNER);
++    else if (x64_native_media_release(previous, X64_MEDIA_CART_OWNER)) return -6;
++    return x64_native_media_collect(X64_MEDIA_CART_OWNER);
++}
++
++static int x64_native_media_restore_reu(const char *filename, int capacity, int write_image)
++{
++    const char *actual = NULL;
++    int value = -1;
++    if (resources_set_int("REUImageWrite", 0) < 0 || resources_set_int("REU", 0) < 0 ||
++        reu_cart_enabled() || resources_set_string("REUfilename", filename) < 0 ||
++        resources_set_int("REUsize", capacity) < 0 || resources_set_int("REUImageWrite", write_image) < 0 ||
++        resources_get_string("REUfilename", &actual) < 0 || !actual || strcmp(actual, filename) ||
++        resources_get_int("REUsize", &value) < 0 || value != capacity ||
++        resources_get_int("REUImageWrite", &value) < 0 || value != write_image) return -6;
++    return 0;
++}
++
++static int x64_native_media_reu_attach(uint32_t capacity, uint64_t input, int *entered)
++{
++    uint64_t candidate = 0, verification = 0, previous = x64_native_media_reu;
++    char path[X64_MEMORY_FILE_PATH_BYTES];
++    const char *old_name = NULL, *actual = NULL;
++    char *previous_name;
++    x64_memory_blob_info info;
++    int old_capacity = 0, old_write = 0, value = 0, result;
++    if (!x64_native_media_reu_capacity(capacity) || reu_cart_enabled()) return -1;
++    result = x64_native_media_kind(input, X64_MEMORY_REU, &info);
++    if (result || info.length != capacity * 1024u) return result ? result : -1;
++    if (resources_get_int("REUsize", &old_capacity) < 0 || resources_get_int("REUImageWrite", &old_write) < 0 ||
++        resources_get_string("REUfilename", &old_name) < 0 || !old_name) return -1;
++    previous_name = lib_strdup(old_name);
++    result = x64_native_media_clone(input, X64_MEMORY_REU, &candidate, path);
++    if (result) { lib_free(previous_name); return result; }
++    *entered = 1;
++    x64_native_stop_left();
++    x64_native_invalidate_profile();
++    result = resources_set_int("REUImageWrite", 0);
++    if (!result) result = resources_set_int("REUsize", (int)capacity);
++    if (!result) result = resources_set_string("REUfilename", path);
++    if (!result) result = resources_set_int("REU", 1);
++    if (!result && (!reu_cart_enabled() || resources_get_int("REUsize", &value) < 0 || value != (int)capacity ||
++        resources_get_int("REUImageWrite", &value) < 0 || value != 0 ||
++        resources_get_string("REUfilename", &actual) < 0 || !actual || strcmp(actual, path))) result = -1;
++    if (!result) result = x64_native_media_capture_reu(&verification);
++    if (!result && !x64_native_media_same_bytes(input, verification)) result = -1;
++    if (verification) x64_memory_blob_drop(verification);
++    if (result) {
++        if (x64_native_media_restore_reu(previous_name, old_capacity, old_write)) {
++            /* Keep backing presence for any uncertain retained REU state. */
++            x64_native_media_hold(previous, X64_MEDIA_REU_OWNER);
++            x64_native_media_reu = candidate;
++            lib_free(previous_name);
++            return -6;
++        }
++        lib_free(previous_name);
++        if (x64_native_media_release(candidate, X64_MEDIA_REU_OWNER)) return -6;
++        return result;
++    }
++    lib_free(previous_name);
++    x64_native_media_reu = candidate;
++    return x64_native_media_release(previous, X64_MEDIA_REU_OWNER) ? -6 : 0;
++}
++
++static int x64_native_media_reu_detach(int discard, uint64_t *captured, int *entered)
++{
++    uint64_t previous = x64_native_media_reu;
++    const char *actual = NULL;
++    int result;
++    if (!reu_cart_enabled()) {
++        if (resources_get_string("REUfilename", &actual) < 0 || !actual) return -1;
++        if (!*actual) {
++            /* Explicit repeated cleanup can release an earlier BUSY/uncertain
++             * owner once disabled + cleared filename has been proved. */
++            *entered = 1;
++            x64_native_media_reu = 0;
++            if (x64_native_media_referenced(previous)) x64_native_media_hold(previous, X64_MEDIA_REU_OWNER);
++            else if (x64_native_media_release(previous, X64_MEDIA_REU_OWNER)) return -6;
++            return x64_native_media_collect(X64_MEDIA_REU_OWNER);
++        }
++        if (!discard) return -1; /* Cannot capture disabled RAM before discard. */
++    } else if (!discard) {
++        result = x64_native_media_capture_reu(captured);
++        if (result) return result; /* A failed capture never authorizes detach. */
++    }
++    *entered = 1;
++    x64_native_stop_left();
++    x64_native_invalidate_profile();
++    if (resources_set_int("REUImageWrite", 0) < 0 || resources_set_int("REU", 0) < 0 ||
++        reu_cart_enabled() || resources_set_string("REUfilename", "") < 0 ||
++        resources_get_string("REUfilename", &actual) < 0 || !actual || *actual) return -6;
++    x64_native_media_reu = 0;
++    if (x64_native_media_referenced(previous)) x64_native_media_hold(previous, X64_MEDIA_REU_OWNER);
++    else if (x64_native_media_release(previous, X64_MEDIA_REU_OWNER)) return -6;
++    return x64_native_media_collect(X64_MEDIA_REU_OWNER);
++}
++
++/* Returns one only for this packet's opcodes; every handled request emits one
++ * response. Invalid wire/store requests are transport failures. Entered core
++ * operations return MutationResult even on a retained failure/uncertain state. */
++static int x64_native_media_command(uint16_t op, uint64_t request, const unsigned char *p, uint32_t n)
++{
++    unsigned char bytes[104] = {0};
++    uint64_t id = 0;
++    uint32_t unit, selector;
++    int result = -1, entered = 0;
++    if (op < 51 || op > 63) return 0;
++    switch (op) {
++        case 51:
++            if (n != 12 || !x64_get32(p + 4)) break;
++            result = x64_memory_blob_begin(x64_get32(p), x64_get32(p + 4), x64_get32(p + 8), &id);
++            if (!result) result = x64_native_media_describe(id, bytes);
++            if (result) break;
++            x64_native_reply(op, request, 0, bytes, 28); return 1;
++        case 52:
++            if (n <= 12 || n - 12 > X64_MEMORY_FILE_MAX_CHUNK) break;
++            id = x64_get64(p);
++            result = x64_memory_blob_chunk(id, x64_get32(p + 8), p + 12, n - 12);
++            if (!result) result = x64_native_media_describe(id, bytes);
++            if (result) break;
++            x64_native_reply(op, request, 0, bytes, 28); return 1;
++        case 53:
++            if (n != 8) break;
++            id = x64_get64(p);
++            result = x64_memory_blob_seal(id);
++            if (!result) result = x64_native_media_describe(id, bytes);
++            if (result) break;
++            x64_native_reply(op, request, 0, bytes, 28); return 1;
++        case 54: {
++            unsigned char *data;
++            uint32_t length;
++            if (n != 16 || !(length = x64_get32(p + 12)) || length > X64_MEMORY_FILE_MAX_CHUNK) break;
++            data = malloc(length);
++            if (!data) { result = -5; break; }
++            result = x64_memory_blob_read(x64_get64(p), x64_get32(p + 8), data, length);
++            if (!result) x64_native_reply(op, request, 0, data, length);
++            free(data);
++            if (result) break;
++            return 1;
++        }
++        case 55:
++            if (n != 8) break;
++            result = x64_memory_blob_drop(x64_get64(p));
++            if (result) break;
++            x64_native_reply(op, request, 0, NULL, 0); return 1;
++        case 56:
++            if (n != 12 || (unit = x64_get32(p)) < 8 || unit > 11) break;
++            result = x64_native_media_disk_attach(unit, x64_get64(p + 4), &entered);
++            if (result && !entered) break;
++            x64_native_result(op, request, result); return 1;
++        case 57:
++            if (n != 4 || (unit = x64_get32(p)) < 8 || unit > 11) break;
++            result = x64_native_media_disk_detach(unit);
++            x64_native_result(op, request, result); return 1;
++        case 58:
++            if (n != 8) break;
++            selector = x64_get32(p); unit = x64_get32(p + 4);
++            if (selector == 0 && unit == 0) {
++                int capacity = 0, i;
++                if (resources_get_int("REUsize", &capacity) < 0) break;
++                for (i = 0; i < 4; i++) {
++                    const char *name = file_system_get_disk_name(i + 8, 0);
++                    x64_put64(bytes + i * 8, x64_native_media_binding(x64_native_media_disks[i], name));
++                    x64_put32(bytes + 60 + i * 4, name && *name ? 1 : 0);
++                }
++                x64_put64(bytes + 32, x64_native_media_binding(x64_native_media_cartridge,
++                    cartridge_get_filename_by_slot(0)));
++                x64_put64(bytes + 40, x64_native_media_binding(x64_native_media_reu, reu_get_file_name()));
++                x64_put32(bytes + 48, (uint32_t)vice_web_cartridge_id());
++                x64_put32(bytes + 52, reu_cart_enabled() ? 1 : 0);
++                x64_put32(bytes + 56, (uint32_t)capacity);
++                x64_native_reply(op, request, 0, bytes, 80); return 1;
++            }
++            if (selector != 1 || unit < 8 || unit > 11) break;
++            result = x64_native_media_capture_disk(unit, &id);
++            if (!result) result = x64_native_media_describe(id, bytes);
++            if (result) break;
++            x64_native_reply(op, request, 0, bytes, 28); return 1;
++        case 59:
++            if (n != 8) break;
++            result = x64_native_media_cartridge_attach(x64_get64(p), &entered);
++            if (result && !entered) break;
++            x64_native_result(op, request, result); return 1;
++        case 60:
++            if (n) break;
++            result = x64_native_media_cartridge_detach();
++            x64_native_result(op, request, result); return 1;
++        case 61:
++            if (n != 12) break;
++            result = x64_native_media_reu_attach(x64_get32(p), x64_get64(p + 4), &entered);
++            if (result && !entered) break;
++            x64_native_result(op, request, result); return 1;
++        case 62:
++            if (n != 4 || x64_get32(p) > 1) break;
++            result = x64_native_media_reu_detach((int)x64_get32(p), &id, &entered);
++            if (result && !entered) break;
++            if (id && x64_native_media_describe(id, bytes)) exit(EXIT_FAILURE);
++            x64_put32(bytes + 28, (uint32_t)result);
++            x64_native_snapshot_bytes(bytes + 32);
++            x64_native_reply(op, request, 0, bytes, 104); return 1;
++        case 63:
++            if (n) break;
++            result = x64_native_media_capture_reu(&id);
++            if (!result) result = x64_native_media_describe(id, bytes);
++            if (result) break;
++            x64_native_reply(op, request, 0, bytes, 28); return 1;
++    }
++    x64_native_reply(op, request, result ? result : -1, NULL, 0);
++    return 1;
++}
++#endif
+--- a/src/arch/shared/archdep_access.c
++++ b/src/arch/shared/archdep_access.c
+@@ -32,6 +32,10 @@
+ 
+ #include "archdep_access.h"
+ 
++#ifdef WEB64_HOST_NATIVE
++#include "arch/headless/x64-memory-file.h"
++#endif
++
+ 
+ /** \brief  Test access of \a pathname against \a mode
+  *
+@@ -43,6 +47,10 @@
+ int archdep_access(const char *pathname, int mode)
+ {
+     int access_mode = 0;    /* this is the same as F_OK */
++
++#ifdef WEB64_HOST_NATIVE
++    if (x64_memory_file_reserved(pathname)) return x64_memory_file_access(pathname, mode);
++#endif
+ 
+     if (mode & ARCHDEP_ACCESS_R_OK) {
+         access_mode |= ARCHDEP_R_OK;
+--- a/src/arch/shared/archdep_expand_path.c
++++ b/src/arch/shared/archdep_expand_path.c
+@@ -40,6 +40,10 @@
+ 
+ #include "archdep_expand_path.h"
+ 
++#ifdef WEB64_HOST_NATIVE
++#include "arch/headless/x64-memory-file.h"
++#endif
++
+ 
+ /** \brief  Generate heap-allocated full pathname of \a orig_name
+  *
+@@ -57,6 +61,12 @@
+  */
+ int archdep_expand_path(char **return_path, const char *orig_name)
+ {
++#ifdef WEB64_HOST_NATIVE
++    if (x64_memory_file_reserved(orig_name)) {
++        *return_path = x64_memory_file_name_valid(orig_name) ? lib_strdup(orig_name) : NULL;
++        return *return_path ? 0 : -1;
++    }
++#endif
+ #ifdef UNIX_COMPILE
+     if (*orig_name == '/') {
+         *return_path = lib_strdup(orig_name);
+--- a/src/arch/shared/archdep_file_size.c
++++ b/src/arch/shared/archdep_file_size.c
+@@ -37,11 +37,19 @@
+ 
+ #include "archdep_file_size.h"
+ 
++#ifdef WEB64_HOST_NATIVE
++#include "arch/headless/x64-memory-file.h"
++#endif
++
+ 
+ off_t archdep_file_size(FILE *stream)
+ {
+     off_t pos;
+     off_t end;
++
++#ifdef WEB64_HOST_NATIVE
++    if (x64_memory_file_stream(stream)) return (off_t)x64_memory_file_size(stream);
++#endif
+ 
+     pos = archdep_ftello(stream);
+     if (pos < 0) {
+--- a/src/arch/shared/archdep_fseeko.c
++++ b/src/arch/shared/archdep_fseeko.c
+@@ -32,6 +32,10 @@
+ 
+ #include "archdep_fseeko.h"
+ 
++#ifdef WEB64_HOST_NATIVE
++#include "arch/headless/x64-memory-file.h"
++#endif
++
+ 
+ /** \brief  Set position in stream
+  *
+@@ -45,6 +49,9 @@
+  */
+ int archdep_fseeko(FILE *stream, off_t offset, int whence)
+ {
++#ifdef WEB64_HOST_NATIVE
++    if (x64_memory_file_stream(stream)) return x64_memory_file_seek64(stream, (int64_t)offset, whence);
++#endif
+ #ifdef HAVE_FSEEKO
+     return fseeko(stream, offset, whence);
+ #else
+--- a/src/arch/shared/archdep_ftello.c
++++ b/src/arch/shared/archdep_ftello.c
+@@ -30,6 +30,10 @@
+ 
+ #include "archdep_ftello.h"
+ 
++#ifdef WEB64_HOST_NATIVE
++#include "arch/headless/x64-memory-file.h"
++#endif
++
+ 
+ /** \brief  Get position in stream
+  *
+@@ -43,6 +47,9 @@
+  */
+ off_t archdep_ftello(FILE *stream)
+ {
++#ifdef WEB64_HOST_NATIVE
++    if (x64_memory_file_stream(stream)) return (off_t)x64_memory_file_tell64(stream);
++#endif
+ #ifdef HAVE_FTELLO
+     return ftello(stream);
+ #else
+--- a/src/arch/shared/archdep_path_is_relative.c
++++ b/src/arch/shared/archdep_path_is_relative.c
+@@ -37,6 +37,10 @@
+ 
+ #include "archdep_path_is_relative.h"
+ 
++#ifdef WEB64_HOST_NATIVE
++#include "arch/headless/x64-memory-file.h"
++#endif
++
+ 
+ /** \brief  Determine if \a path is a relative path
+  *
+@@ -46,6 +50,9 @@
+  */
+ int archdep_path_is_relative(const char *path)
+ {
++#ifdef WEB64_HOST_NATIVE
++    if (x64_memory_file_reserved(path)) return 0;
++#endif
+     if (path == NULL || *path == '\0') {
+         return 1;   /* yup, */
+     }
+--- a/src/arch/shared/archdep_real_path.c
++++ b/src/arch/shared/archdep_real_path.c
+@@ -37,6 +37,10 @@
+ 
+ #include "archdep_real_path.h"
+ 
++#ifdef WEB64_HOST_NATIVE
++#include "arch/headless/x64-memory-file.h"
++#endif
++
+ /** \brief  Resolve \a pathname to its canonicalized absolute form
+  *
+  * \param[in]   pathname             pathname to normalize. This file must
+@@ -49,6 +53,12 @@
+  */
+ char *archdep_real_path(const char *pathname, char *resolved_pathname)
+ {
++#ifdef WEB64_HOST_NATIVE
++    if (x64_memory_file_reserved(pathname)) {
++        if (!x64_memory_file_name_valid(pathname)) return NULL;
++        return strcpy(resolved_pathname, pathname);
++    }
++#endif
+ #ifdef WINDOWS_COMPILE
+     DWORD size = GetFullPathNameA(pathname, _MAX_PATH, resolved_pathname, NULL);
+     if (size == 0 || size >= _MAX_PATH) {
+@@ -84,6 +94,10 @@
+ #else
+     char path1_norm[PATH_MAX], path2_norm[PATH_MAX];
+ #endif
++#ifdef WEB64_HOST_NATIVE
++    if (x64_memory_file_reserved(path1) || x64_memory_file_reserved(path2))
++        return x64_memory_file_equal(path1, path2);
++#endif
+     if (!archdep_real_path(path1, path1_norm)) {
+         return 0;
+     }
+--- a/src/arch/shared/archdep_remove.c
++++ b/src/arch/shared/archdep_remove.c
+@@ -44,6 +44,10 @@
+ 
+ #include "archdep_remove.h"
+ 
++#ifdef WEB64_HOST_NATIVE
++#include "arch/headless/x64-memory-file.h"
++#endif
++
+ 
+ /** \brief  Remove a file
+  *
+@@ -53,6 +57,9 @@
+  */
+ int archdep_remove(const char *path)
+ {
++#ifdef WEB64_HOST_NATIVE
++    if (x64_memory_file_reserved(path)) return x64_memory_file_remove(path);
++#endif
+ #if defined(UNIX_COMPILE) || defined(HAIKU_COMPILE)
+     return unlink(path);
+ #elif defined(WINDOWS_COMPILE)
+--- a/src/arch/shared/archdep_stat.c
++++ b/src/arch/shared/archdep_stat.c
+@@ -41,6 +41,10 @@
+ 
+ #include "archdep_stat.h"
+ 
++#ifdef WEB64_HOST_NATIVE
++#include "arch/headless/x64-memory-file.h"
++#endif
++
+ 
+ /** \brief  Determine the size of \a path and whether it's a directory
+  *
+@@ -53,6 +57,10 @@
+ int archdep_stat(const char *path, size_t *len, unsigned int *isdir)
+ {
+     struct stat statbuf;
++
++#ifdef WEB64_HOST_NATIVE
++    if (x64_memory_file_reserved(path)) return x64_memory_file_stat(path, len, isdir);
++#endif
+ 
+     if (stat(path, &statbuf) < 0) {
+         if (len != NULL) {
+--- a/src/arch/shared/sounddrv/sounddummy.c
++++ b/src/arch/shared/sounddrv/sounddummy.c
+@@ -205,6 +205,198 @@
+ {
+     return sound_register_device(&web_audio_device);
+ }
++#elif defined(WEB64_HOST_NATIVE)
++/* Host-owned transport only. VICE still generates the original interleaved
++ * s16 stream. No browser pointer-as-int exports or concurrent consumer is
++ * enabled here; the native command service drains on this same core thread.
++ */
++#include "x64-audio-native.h"
++#include "arch/headless/x64-native-delivery.h"
++
++#define X64_AUDIO_NATIVE_BUFFER_SAMPLES ((SOUND_SAMPLE_RATE * SOUND_OUTPUT_CHANNELS_MAX) / 8)
++
++static int16_t x64_audio_buffer[X64_AUDIO_NATIVE_BUFFER_SAMPLES];
++static size_t x64_audio_read_pos;
++static size_t x64_audio_write_pos;
++static size_t x64_audio_queued;
++static uint64_t x64_audio_dropped_samples;
++static uint32_t x64_audio_rate = SOUND_SAMPLE_RATE;
++static uint32_t x64_audio_channel_count = SOUND_OUTPUT_CHANNELS_MAX;
++static int x64_audio_enabled;
++
++void x64_audio_native_reset(void)
++{
++    x64_native_delivery_audio_reset();
++    x64_audio_read_pos = 0;
++    x64_audio_write_pos = 0;
++    x64_audio_queued = 0;
++    x64_audio_dropped_samples = 0;
++    memset(x64_audio_buffer, 0, sizeof(x64_audio_buffer));
++}
++
++static int x64_audio_init(const char *param, int *speed, int *fragsize, int *fragnr, int *channels)
++{
++    (void)param;
++    (void)fragsize;
++    (void)fragnr;
++
++    x64_audio_rate = speed != NULL && *speed > 0 ? (uint32_t)*speed : SOUND_SAMPLE_RATE;
++    x64_audio_channel_count = channels != NULL && *channels > 0
++        ? (uint32_t)*channels : SOUND_OUTPUT_CHANNELS_MAX;
++    if (x64_audio_channel_count > SOUND_OUTPUT_CHANNELS_MAX) {
++        x64_audio_channel_count = SOUND_OUTPUT_CHANNELS_MAX;
++        if (channels != NULL) {
++            *channels = (int)x64_audio_channel_count;
++        }
++    }
++    x64_audio_native_reset();
++    return 0;
++}
++
++static int x64_audio_write(int16_t *samples, size_t count)
++{
++    size_t overflow, first;
++
++    if (samples == NULL || count == 0 || !x64_audio_enabled) {
++        return 0;
++    }
++    /* Independent lossy host-delivery tap BEFORE Source reference capture's
++     * drop-oldest handling. Neither path consumes or rewrites the other. */
++    x64_native_delivery_audio(samples, count, x64_audio_rate, x64_audio_channel_count);
++    if (count > X64_AUDIO_NATIVE_BUFFER_SAMPLES - x64_audio_queued) {
++        overflow = count - (X64_AUDIO_NATIVE_BUFFER_SAMPLES - x64_audio_queued);
++        if ((uint64_t)overflow > UINT64_MAX - x64_audio_dropped_samples) {
++            x64_audio_dropped_samples = UINT64_MAX;
++        } else {
++            x64_audio_dropped_samples += (uint64_t)overflow;
++        }
++        if (count >= X64_AUDIO_NATIVE_BUFFER_SAMPLES) {
++            /* Retain exactly the newest bounded span, like Source's sequential
++             * drop-oldest handoff, without looping over discarded samples.
++             */
++            samples += count - X64_AUDIO_NATIVE_BUFFER_SAMPLES;
++            count = X64_AUDIO_NATIVE_BUFFER_SAMPLES;
++            x64_audio_read_pos = x64_audio_write_pos = x64_audio_queued = 0;
++        } else {
++            x64_audio_native_consume(overflow);
++        }
++    }
++    first = X64_AUDIO_NATIVE_BUFFER_SAMPLES - x64_audio_write_pos;
++    if (first > count) {
++        first = count;
++    }
++    memcpy(x64_audio_buffer + x64_audio_write_pos, samples, first * sizeof(*samples));
++    if (count > first) {
++        memcpy(x64_audio_buffer, samples + first, (count - first) * sizeof(*samples));
++    }
++    x64_audio_write_pos = (x64_audio_write_pos + count) % X64_AUDIO_NATIVE_BUFFER_SAMPLES;
++    x64_audio_queued += count;
++    return 0;
++}
++
++static int x64_audio_bufferspace(void)
++{
++    /* The capture handoff is not a timing device. Never block the core waiting
++     * for its own command-service drain; native pacing owns wall-clock timing.
++     */
++    return X64_AUDIO_NATIVE_BUFFER_SAMPLES;
++}
++
++static const sound_device_t x64_audio_device =
++{
++    "web",
++    x64_audio_init,
++    x64_audio_write,
++    NULL,
++    NULL,
++    x64_audio_bufferspace,
++    x64_audio_native_reset,
++    NULL,
++    NULL,
++    0,
++    SOUND_OUTPUT_CHANNELS_MAX,
++    false
++};
++
++const int16_t *x64_audio_native_samples(size_t *contiguous_count)
++{
++    size_t count = X64_AUDIO_NATIVE_BUFFER_SAMPLES - x64_audio_read_pos;
++    if (count > x64_audio_queued) {
++        count = x64_audio_queued;
++    }
++    if (contiguous_count != NULL) {
++        *contiguous_count = count;
++    }
++    return count == 0 ? NULL : x64_audio_buffer + x64_audio_read_pos;
++}
++
++size_t x64_audio_native_queued(void)
++{
++    return x64_audio_queued;
++}
++
++size_t x64_audio_native_capacity(void)
++{
++    return X64_AUDIO_NATIVE_BUFFER_SAMPLES;
++}
++
++uint32_t x64_audio_native_sample_rate(void)
++{
++    return x64_audio_rate;
++}
++
++uint32_t x64_audio_native_channels(void)
++{
++    return x64_audio_channel_count;
++}
++
++uint64_t x64_audio_native_overruns(void)
++{
++    return x64_audio_dropped_samples;
++}
++
++size_t x64_audio_native_consume(size_t sample_count)
++{
++    if (sample_count > x64_audio_queued) {
++        sample_count = x64_audio_queued;
++    }
++    x64_audio_read_pos = (x64_audio_read_pos + sample_count) % X64_AUDIO_NATIVE_BUFFER_SAMPLES;
++    x64_audio_queued -= sample_count;
++    return sample_count;
++}
++
++size_t x64_audio_native_copy(int16_t *destination, size_t capacity_samples)
++{
++    size_t copied = 0;
++    if (destination == NULL) {
++        return 0;
++    }
++    while (copied < capacity_samples && x64_audio_queued != 0) {
++        size_t count;
++        const int16_t *samples = x64_audio_native_samples(&count);
++        if (count > capacity_samples - copied) {
++            count = capacity_samples - copied;
++        }
++        memcpy(destination + copied, samples, count * sizeof(*samples));
++        x64_audio_native_consume(count);
++        copied += count;
++    }
++    return copied;
++}
++
++void x64_audio_native_set_enabled(int enabled)
++{
++    enabled = enabled ? 1 : 0;
++    if (x64_audio_enabled != enabled) {
++        x64_audio_native_reset();
++    }
++    x64_audio_enabled = enabled;
++}
++
++int sound_init_web_device(void)
++{
++    return sound_register_device(&x64_audio_device);
++}
+ #endif
+ 
+ static int dummy_write(int16_t *pbuf, size_t nr)
+--- /dev/null
++++ b/src/arch/shared/sounddrv/x64-audio-native.h
+@@ -0,0 +1,44 @@
++/* x64-owned native capture adapter for the retained VICE s16 sample stream.
++ *
++ * All functions run on the emulator core thread, including the synchronous
++ * command service that copies samples into its owned response. This is NOT a
++ * shared-reader or audio callback ring. Device playback is a separate adapter.
++ */
++#ifndef X64_AUDIO_NATIVE_H
++#define X64_AUDIO_NATIVE_H
++
++#include <stddef.h>
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* Interleaved signed 16-bit samples, not frames. The borrowed contiguous view
++ * is invalidated by write, consume, copy, reset, enable change, init or close.
++ * Copy its bytes synchronously before returning to the emulator core loop.
++ */
++const int16_t *x64_audio_native_samples(size_t *contiguous_count);
++size_t x64_audio_native_queued(void);
++size_t x64_audio_native_capacity(void);
++uint32_t x64_audio_native_sample_rate(void);
++uint32_t x64_audio_native_channels(void);
++/* Number of samples dropped because the bounded handoff was full. */
++uint64_t x64_audio_native_overruns(void);
++
++/* Clamp to available samples. copy drains at most capacity_samples, including
++ * a wrapped second span. Its destination must not alias capture storage.
++ * Null destination or zero capacity consumes nothing.
++ */
++size_t x64_audio_native_consume(size_t sample_count);
++size_t x64_audio_native_copy(int16_t *destination, size_t capacity_samples);
++void x64_audio_native_reset(void);
++/* Capture starts disabled, matching the Web64 bridge. Changing enable state
++ * clears buffered samples and overrun count; reset does not change enable state.
++ */
++void x64_audio_native_set_enabled(int enabled);
++
++#ifdef __cplusplus
++}
++#endif
++#endif
+--- a/src/c64/c64memsc.c
++++ b/src/c64/c64memsc.c
+@@ -134,7 +134,7 @@
+ */
+ static int watchpoints_active = 0;
+ 
+-#if defined(VICE_WEB) && defined(__EMSCRIPTEN__) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
++#if defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
+ #include "web64-profiler-memory-impl.h"
+ #define WEB64_MEMORY_WRITE(addr) web64_memory_write((uint16_t)(addr))
+ #define WEB64_MEMORY_INVALIDATE() web64_memory_invalidate()
+--- a/src/c64/cart/c64cart.c
++++ b/src/c64/cart/c64cart.c
+@@ -143,6 +143,11 @@
+ #include "westermann.h"
+ #include "zaxxon.h"
+ #include "zippcode48.h"
++
++#ifdef WEB64_HOST_NATIVE
++#define X64_MEMORY_FILE_STDIO
++#include "arch/headless/x64-memory-file.h"
++#endif
+ #undef CARTRIDGE_INCLUDE_PRIVATE_API
+ 
+ /* #define DEBUGCART */
+--- a/src/c64/cart/easyflash.c
++++ b/src/c64/cart/easyflash.c
+@@ -51,6 +51,11 @@
+ #include "resources.h"
+ #include "snapshot.h"
+ #include "util.h"
++
++#ifdef WEB64_HOST_NATIVE
++#define X64_MEMORY_FILE_STDIO
++#include "arch/headless/x64-memory-file.h"
++#endif
+ 
+ #define EASYFLASH_N_BANK_BITS 6
+ #define EASYFLASH_N_BANKS     (1 << (EASYFLASH_N_BANK_BITS))
+@@ -389,7 +394,7 @@
+ 
+ /* ---------------------------------------------------------------------*/
+ 
+-#if defined(VICE_WEB) && defined(__EMSCRIPTEN__) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
++#if defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
+ /* Capture-only provenance guard. Saturation stays unproven, never wraps. */
+ uint32_t easyflash_web_profiler_generation;
+ #endif
+@@ -401,7 +406,7 @@
+ 
+ void easyflash_roml_store(uint16_t addr, uint8_t value)
+ {
+-#if defined(VICE_WEB) && defined(__EMSCRIPTEN__) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
++#if defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
+     if (easyflash_web_profiler_generation != UINT32_MAX) easyflash_web_profiler_generation++;
+ #endif
+     flash040core_store(easyflash_state_low, (easyflash_register_00 * 0x2000) + (addr & 0x1fff), value);
+@@ -414,7 +419,7 @@
+ 
+ void easyflash_romh_store(uint16_t addr, uint8_t value)
+ {
+-#if defined(VICE_WEB) && defined(__EMSCRIPTEN__) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
++#if defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
+     if (easyflash_web_profiler_generation != UINT32_MAX) easyflash_web_profiler_generation++;
+ #endif
+     flash040core_store(easyflash_state_high, (easyflash_register_00 * 0x2000) + (addr & 0x1fff), value);
+--- a/src/c64/cart/reu.c
++++ b/src/c64/cart/reu.c
+@@ -64,6 +64,11 @@
+ 
+ #define CARTRIDGE_INCLUDE_PRIVATE_API
+ #include "reu.h"
++
++#ifdef WEB64_HOST_NATIVE
++#define X64_MEMORY_FILE_STDIO
++#include "arch/headless/x64-memory-file.h"
++#endif
+ #undef CARTRIDGE_INCLUDE_PRIVATE_API
+ 
+ #if 0
+--- a/src/c64/web64-profiler-native.h
++++ b/src/c64/web64-profiler-native.h
+@@ -1,11 +1,17 @@
+ /* x64sc adapter for the bounded observer ledger. GPL-2.0-or-later.
+- * Included by c64cpusc.c only. Native ABI 2 is deliberately distinct from the
++ * Included by c64cpusc.c only. Native ABI 3 is deliberately distinct from the
+  * portable W64P export envelope; the worker validates/copies these tables.
+  */
+ /* Normal builds must omit the observer entirely, not branch around it. */
+-#if (defined(VICE_WEB) && defined(__EMSCRIPTEN__) && defined(ENABLE_PROFILER) && ENABLE_PROFILER) || defined(W64P_NATIVE_HOST_TEST)
++#if (defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)) && defined(ENABLE_PROFILER) && ENABLE_PROFILER) || defined(W64P_NATIVE_HOST_TEST)
+ #ifndef W64P_NATIVE_HOST_TEST
++#ifdef __EMSCRIPTEN__
+ #include <emscripten/emscripten.h>
++#else
++#ifndef EMSCRIPTEN_KEEPALIVE
++#define EMSCRIPTEN_KEEPALIVE
++#endif
++#endif
+ #include "mem.h"
+ #include "viciitypes.h"
+ #endif
+@@ -219,11 +225,13 @@
+     p[5] = c->reason;
+     p[8] = c->frames;
+     p[11] = c->count;
++    p[14] = c->pc_count;
++#ifndef WEB64_HOST_NATIVE
+     p[13] = (uint32_t)(uintptr_t)c->records;
+-    p[14] = c->pc_count;
+     p[16] = (uint32_t)(uintptr_t)c->pcs;
+     p[17] = (uint32_t)(uintptr_t)c->frame;
+     p[19] = (uint32_t)(uintptr_t)c->line;
++#endif
+     p[20] = c->frames * c->lines;
+     p[22] = c->owned;
+     p[23] = c->capacity;
+@@ -236,14 +244,103 @@
+     p[33] = c->has_clock;
+     p[34] = web64_profiler_capture_epoch;
+     p[36] = c->mode;
+-    p[40] = (uint32_t)(uintptr_t)mem_web_profiler_baseline();
+     p[41] = 65536;
+     p[42] = (uint32_t)web64_profiler_arm_clock;
+     p[43] = (uint32_t)(web64_profiler_arm_clock >> 32);
++#ifndef WEB64_HOST_NATIVE
++    p[40] = (uint32_t)(uintptr_t)mem_web_profiler_baseline();
+     p[44] = (uint32_t)(uintptr_t)mem_web_profiler_cartridge_baseline();
++#endif
+     p[45] = mem_web_profiler_cartridge_bytes();
+     return p;
+ }
++
++#ifdef WEB64_HOST_NATIVE
++#include "x64-profiler-native.h"
++
++int x64_profiler_info(uint32_t out[X64_PROFILER_INFO_WORDS])
++{
++    if (!out) return 0;
++    memcpy(out, vice_web_profiler_info(), sizeof(web64_profiler_info));
++    return 1;
++}
++
++/* The descriptor is inspected and copied on the same core thread, without
++ * advancing the emulator or dispatching another command between operations.
++ * These are ledger-owned buffers; this adapter never allocates or publishes
++ * another owner and never changes capture state. */
++static int x64_profiler_descriptor(uint32_t id, const void **data, size_t *length)
++{
++    const w64p_ledger_t *c = web64_profiler;
++    size_t count = 0, stride = 1, limit = W64P_SUMMARY_BYTES;
++    uint64_t detail_bytes;
++    *data = NULL;
++    *length = 0;
++    if (id < X64_PROFILER_RECORDS || id > X64_PROFILER_CARTRIDGE) return 0;
++    if (!c) return 1;
++    detail_bytes = (uint64_t)c->capacity * sizeof(w64p_record_t);
++    if (c->frames < 1 || c->frames > W64P_MAX_FRAMES ||
++        c->lines < 1 || c->lines > W64P_MAX_LINES ||
++        c->count > c->capacity || c->pc_count > W64P_MAX_PCS ||
++        detail_bytes > W64P_DETAIL_BYTES || detail_bytes > c->owned ||
++        (uint64_t)c->owned - detail_bytes > W64P_SUMMARY_BYTES) return 0;
++    switch (id) {
++        case X64_PROFILER_RECORDS:
++            *data = c->records;
++            count = c->count;
++            stride = sizeof(*c->records);
++            limit = W64P_DETAIL_BYTES;
++            break;
++        case X64_PROFILER_PCS:
++            *data = c->pcs;
++            count = c->pc_count;
++            stride = sizeof(*c->pcs);
++            break;
++        case X64_PROFILER_FRAMES:
++            *data = c->frame;
++            count = c->frames;
++            stride = sizeof(*c->frame);
++            break;
++        case X64_PROFILER_LINES:
++            *data = c->line;
++            count = (size_t)c->frames * c->lines;
++            stride = sizeof(*c->line);
++            break;
++        case X64_PROFILER_RAM:
++            *data = mem_web_profiler_baseline();
++            count = 65536;
++            break;
++        case X64_PROFILER_CARTRIDGE:
++            *data = mem_web_profiler_cartridge_baseline();
++            count = mem_web_profiler_cartridge_bytes();
++            break;
++    }
++    if (count > limit / stride || (count && !*data)) {
++        *data = NULL;
++        return 0;
++    }
++    *length = count * stride;
++    return 1;
++}
++
++const void *x64_profiler_buffer(uint32_t id, size_t *length)
++{
++    const void *data;
++    if (!length) return NULL;
++    if (!x64_profiler_descriptor(id, &data, length)) return NULL;
++    return data;
++}
++
++int x64_profiler_copy(uint32_t id, size_t offset, void *out, size_t length)
++{
++    const void *data;
++    size_t available;
++    if (!x64_profiler_descriptor(id, &data, &available) ||
++        offset > available || length > available - offset || (length && !out)) return 0;
++    if (length) memcpy(out, (const uint8_t *)data + offset, length);
++    return 1;
++}
++#endif
+ 
+ /* One local ticket per native interval. Disabled: no fetch hook, allocations,
+  * source work or transport. A host command during Asyncify suspension cannot
+--- /dev/null
++++ b/src/c64/x64-profiler-native.h
+@@ -0,0 +1,42 @@
++/* Pointer-safe native host view of the unchanged Web64 profiler ABI 3 ledger.
++ * GPL-2.0-or-later. Available only in WEB64_HOST_NATIVE profiling builds.
++ */
++#ifndef X64_PROFILER_NATIVE_H
++#define X64_PROFILER_NATIVE_H
++#include <stddef.h>
++#include <stdint.h>
++
++#define X64_PROFILER_INFO_WORDS 46u
++enum {
++    X64_PROFILER_RECORDS = 1,
++    X64_PROFILER_PCS = 2,
++    X64_PROFILER_FRAMES = 3,
++    X64_PROFILER_LINES = 4,
++    X64_PROFILER_RAM = 5,
++    X64_PROFILER_CARTRIDGE = 6
++};
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++/* All calls are core-thread-only. Control remains vice_web_profiler_control.
++ * Metadata retains the 46 ABI 3 words, with Wasm pointer slots
++ * 13/16/17/19/40/44 zero. Returns 1 on success, 0 for a null destination. */
++int x64_profiler_info(uint32_t out[X64_PROFILER_INFO_WORDS]);
++
++/* Borrowed ledger storage, with byte length in native size_t (never truncated
++ * to a Wasm offset). Copy before advancing emulation or issuing any control,
++ * reset or teardown operation; no cross-thread access is permitted. A null
++ * return with zero length denotes an empty, absent or invalid descriptor.
++ * Use bounded copy when a success/failure distinction is required. */
++const void *x64_profiler_buffer(uint32_t id, size_t *length);
++
++/* Copy a checked byte range into caller-owned, non-overlapping storage.
++ * Returns 1 on success, including a zero-length range in a known empty buffer;
++ * returns 0 for an unknown descriptor, invalid bounds or null nonempty output.
++ * No partial copy is performed on failure. */
++int x64_profiler_copy(uint32_t id, size_t offset, void *out, size_t length);
++#ifdef __cplusplus
++}
++#endif
++#endif
+--- a/src/crt.c
++++ b/src/crt.c
+@@ -39,6 +39,11 @@
+ #include "types.h"
+ #include "c64cart.h"  /* FIXME: for C64CART_IMAGE_LIMIT */
+ #include "util.h"
++
++#ifdef WEB64_HOST_NATIVE
++#define X64_MEMORY_FILE_STDIO
++#include "arch/headless/x64-memory-file.h"
++#endif
+ 
+ /* #define DEBUGCRT */
+ 
+--- a/src/diskimage/fsimage-check.c
++++ b/src/diskimage/fsimage-check.c
+@@ -32,6 +32,11 @@
+ #include "diskconstants.h"
+ #include "diskimage.h"
+ #include "fsimage-check.h"
++
++#ifdef WEB64_HOST_NATIVE
++#define X64_MEMORY_FILE_STDIO
++#include "arch/headless/x64-memory-file.h"
++#endif
+ 
+ 
+ /** \brief  Check if (\a track, \a sector) is valid for \a image
+--- a/src/diskimage/fsimage-create.c
++++ b/src/diskimage/fsimage-create.c
+@@ -48,6 +48,11 @@
+ #include "x64.h"
+ #include "p64.h"
+ #include "cbmdos.h"
++
++#ifdef WEB64_HOST_NATIVE
++#define X64_MEMORY_FILE_STDIO
++#include "arch/headless/x64-memory-file.h"
++#endif
+ 
+ /* #define DBGIMGCREATE */
+ 
+--- a/src/diskimage/fsimage-dxx.c
++++ b/src/diskimage/fsimage-dxx.c
+@@ -41,6 +41,11 @@
+ #include "types.h"
+ #include "util.h"
+ #include "x64.h"
++
++#ifdef WEB64_HOST_NATIVE
++#define X64_MEMORY_FILE_STDIO
++#include "arch/headless/x64-memory-file.h"
++#endif
+ 
+ static log_t fsimage_dxx_log = LOG_DEFAULT;
+ 
+--- a/src/diskimage/fsimage-gcr.c
++++ b/src/diskimage/fsimage-gcr.c
+@@ -39,6 +39,11 @@
+ #include "lib.h"
+ #include "types.h"
+ #include "util.h"
++
++#ifdef WEB64_HOST_NATIVE
++#define X64_MEMORY_FILE_STDIO
++#include "arch/headless/x64-memory-file.h"
++#endif
+ 
+ 
+ static log_t fsimage_gcr_log = LOG_DEFAULT;
+--- a/src/diskimage/fsimage-p64.c
++++ b/src/diskimage/fsimage-p64.c
+@@ -41,6 +41,11 @@
+ #include "types.h"
+ #include "util.h"
+ #include "p64.h"
++
++#ifdef WEB64_HOST_NATIVE
++#define X64_MEMORY_FILE_STDIO
++#include "arch/headless/x64-memory-file.h"
++#endif
+ 
+ static log_t fsimage_p64_log = LOG_DEFAULT;
+ 
+--- a/src/diskimage/fsimage-probe.c
++++ b/src/diskimage/fsimage-probe.c
+@@ -45,6 +45,11 @@
+ #include "util.h"
+ #include "x64.h"
+ 
++#ifdef WEB64_HOST_NATIVE
++#define X64_MEMORY_FILE_STDIO
++#include "arch/headless/x64-memory-file.h"
++#endif
++
+ #define IS_D67_LEN(x) ((x) == D67_FILE_SIZE)
+ #define IS_D71_LEN(x) (((x) == D71_FILE_SIZE) || ((x) == D71_FILE_SIZE_E))
+ #define IS_D81_LEN(x) (((x) == D81_FILE_SIZE) || ((x) == D81_FILE_SIZE_E) || \
+--- a/src/diskimage/fsimage.c
++++ b/src/diskimage/fsimage.c
+@@ -43,6 +43,11 @@
+ #include "zfile.h"
+ #include "util.h"
+ #include "cbmdos.h"
++
++#ifdef WEB64_HOST_NATIVE
++#define X64_MEMORY_FILE_STDIO
++#include "arch/headless/x64-memory-file.h"
++#endif
+ 
+ 
+ static log_t fsimage_log = LOG_DEFAULT;
+--- a/src/mainc64cpu.c
++++ b/src/mainc64cpu.c
+@@ -812,7 +812,7 @@
+ 
+ #define GLOBAL_REGS maincpu_regs
+ 
+-#if defined(VICE_WEB) && defined(__EMSCRIPTEN__)
++#if defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE))
+ #include "arch/headless/web64-frame-step.h"
+ #define WEB64_FRAME_STEP_RESET() vice_web_frame_step_cancel()
+ #endif
+--- a/src/sound.c
++++ b/src/sound.c
+@@ -126,7 +126,7 @@
+     { "sdl", "SDL sound output", sound_init_sdl_device, SOUND_PLAYBACK_DEVICE },
+ #endif
+ 
+-#ifdef __EMSCRIPTEN__
++#if defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)
+     { "web", "WebAudio sound output", sound_init_web_device, SOUND_PLAYBACK_DEVICE },
+ #endif
+ 
+--- a/src/sound.h
++++ b/src/sound.h
+@@ -268,7 +268,7 @@
+ /* device initialization prototypes */
+ int sound_init_alsa_device(void);
+ int sound_init_dummy_device(void);
+-#ifdef __EMSCRIPTEN__
++#if defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)
+ int sound_init_web_device(void);
+ #endif
+ int sound_init_dump_device(void);
+--- a/src/util.c
++++ b/src/util.c
+@@ -55,6 +55,11 @@
+ #include "log.h"
+ 
+ #include "util.h"
++
++#ifdef WEB64_HOST_NATIVE
++#define X64_MEMORY_FILE_STDIO
++#include "arch/headless/x64-memory-file.h"
++#endif
+ 
+ 
+ /* #define DBGUTIL */
+--- a/src/viciisc/vicii-cycle.c
++++ b/src/viciisc/vicii-cycle.c
+@@ -47,7 +47,7 @@
+ #include "vicii-resources.h"
+ #include "vicii.h"
+ #include "viciitypes.h"
+-#if defined(VICE_WEB) && defined(__EMSCRIPTEN__)
++#if defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE))
+ #include "../arch/headless/web64-frame-step.h"
+ #endif
+ 
+@@ -206,7 +206,7 @@
+ {
+     vicii.start_of_frame = 0;
+     vicii.raster_line = 0;
+-#if defined(VICE_WEB) && defined(__EMSCRIPTEN__)
++#if defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE))
+     vice_web_frame_step_vic_start();
+ #endif
+     vicii.refresh_counter = 0xff;
+@@ -630,7 +630,7 @@
+     return vicii_cycle() && !check;
+ }
+ 
+-#if defined(VICE_WEB) && defined(__EMSCRIPTEN__) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
++#if defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
+ void (*vicii_web_cpu_stall_observer)(CLOCK clock, unsigned int cause) = NULL;
+ #endif
+ 
+@@ -639,7 +639,7 @@
+ {
+     int ba_low;
+ 
+-#if defined(VICE_WEB) && defined(__EMSCRIPTEN__) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
++#if defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
+     /* Disabled path branches once per steal group, not on every VIC cycle.
+      * The callback is native and bounded. Its ticket check safely ignores a
+      * continuation if a host command cancelled capture during a suspended CPU. */
+--- a/src/viciisc/vicii-cycle.h
++++ b/src/viciisc/vicii-cycle.h
+@@ -31,7 +31,7 @@
+ int vicii_cycle_reu(void);
+ void vicii_steal_cycles(void);
+ 
+-#if defined(VICE_WEB) && defined(__EMSCRIPTEN__) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
++#if defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
+ #include "types.h"
+ /* Only actual CPU-blocked cycles, never a per-cycle browser/JS callback. */
+ extern void (*vicii_web_cpu_stall_observer)(CLOCK clock, unsigned int cause);
+--- a/src/zfile.c
++++ b/src/zfile.c
+@@ -56,6 +56,11 @@
+ #include "zipcode.h"
+ 
+ #include "zfile.h"
++
++#ifdef WEB64_HOST_NATIVE
++#define X64_MEMORY_FILE_STDIO
++#include "arch/headless/x64-memory-file.h"
++#endif
+ 
+ 
+ /* ------------------------------------------------------------------------- */
+@@ -973,6 +978,10 @@
+     enum compression_type type;
+     int write_mode = 0;
+ 
++#ifdef WEB64_HOST_NATIVE
++    /* Resident media bypass compression, temporary files and host path lists. */
++    if (x64_memory_file_reserved(name)) return x64_memory_file_fopen(name, mode);
++#endif
+     if (!zinit_done) {
+         zinit();
+     }
+@@ -1097,6 +1106,10 @@
+ {
+     zfile_t *ptr;
+ 
++#ifdef WEB64_HOST_NATIVE
++    if (x64_memory_file_stream(stream)) return x64_memory_file_fclose(stream);
++#endif
++
+     if (!zinit_done) {
+         errno = EBADF;
+         return -1;
+@@ -1127,6 +1140,10 @@
+     char *fullname = NULL;
+     zfile_t *p = zfile_list;
+ 
++#ifdef WEB64_HOST_NATIVE
++    /* Resident streams never enter the compressed-file action list. */
++    if (x64_memory_file_reserved(filename)) return x64_memory_file_name_valid(filename) ? 0 : -1;
++#endif
+     archdep_expand_path(&fullname, filename);
+ 
+     while (p != NULL) {

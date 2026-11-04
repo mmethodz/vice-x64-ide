@@ -812,7 +812,7 @@ void maincpu_mainloop(void)
 
 #define GLOBAL_REGS maincpu_regs
 
-#if defined(VICE_WEB) && defined(__EMSCRIPTEN__)
+#if defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE))
 #include "arch/headless/web64-frame-step.h"
 #define WEB64_FRAME_STEP_RESET() vice_web_frame_step_cancel()
 #endif

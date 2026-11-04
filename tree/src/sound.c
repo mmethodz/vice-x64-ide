@@ -126,7 +126,7 @@ static const sound_register_devices_t sound_register_devices[] = {
     { "sdl", "SDL sound output", sound_init_sdl_device, SOUND_PLAYBACK_DEVICE },
 #endif
 
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)
     { "web", "WebAudio sound output", sound_init_web_device, SOUND_PLAYBACK_DEVICE },
 #endif
 

@@ -37,6 +37,10 @@
 
 #include "archdep_real_path.h"
 
+#ifdef WEB64_HOST_NATIVE
+#include "arch/headless/x64-memory-file.h"
+#endif
+
 /** \brief  Resolve \a pathname to its canonicalized absolute form
  *
  * \param[in]   pathname             pathname to normalize. This file must
@@ -49,6 +53,12 @@
  */
 char *archdep_real_path(const char *pathname, char *resolved_pathname)
 {
+#ifdef WEB64_HOST_NATIVE
+    if (x64_memory_file_reserved(pathname)) {
+        if (!x64_memory_file_name_valid(pathname)) return NULL;
+        return strcpy(resolved_pathname, pathname);
+    }
+#endif
 #ifdef WINDOWS_COMPILE
     DWORD size = GetFullPathNameA(pathname, _MAX_PATH, resolved_pathname, NULL);
     if (size == 0 || size >= _MAX_PATH) {
@@ -83,6 +93,10 @@ int archdep_real_path_equal(const char *path1, const char *path2)
     char path1_norm[_MAX_PATH], path2_norm[_MAX_PATH];
 #else
     char path1_norm[PATH_MAX], path2_norm[PATH_MAX];
+#endif
+#ifdef WEB64_HOST_NATIVE
+    if (x64_memory_file_reserved(path1) || x64_memory_file_reserved(path2))
+        return x64_memory_file_equal(path1, path2);
 #endif
     if (!archdep_real_path(path1, path1_norm)) {
         return 0;

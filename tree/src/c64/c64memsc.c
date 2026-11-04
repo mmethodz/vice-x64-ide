@@ -134,7 +134,7 @@ static int tape_motor_in = 0;
 */
 static int watchpoints_active = 0;
 
-#if defined(VICE_WEB) && defined(__EMSCRIPTEN__) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
+#if defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
 #include "web64-profiler-memory-impl.h"
 #define WEB64_MEMORY_WRITE(addr) web64_memory_write((uint16_t)(addr))
 #define WEB64_MEMORY_INVALIDATE() web64_memory_invalidate()
@@ -1549,3 +1549,48 @@ void c64_mem_ui_shutdown(void)
 {
     c64scui_shutdown();
 }
+
+#ifdef WEB64_HOST_NATIVE
+#include "easyflash.h"
+extern int roml_bank, romh_bank;
+extern uint8_t *roml_banks, *romh_banks;
+extern int mem_cartridge_type;
+/* Cold debugger identity: actual read dispatch and bank latch, no profiler arm.
+ * Unsupported expansion or transient flash reads are unknown, never RAM. */
+static uint32_t x64_debug_space(uint16_t address)
+{
+    uint32_t profile=0, window=0, bank=0;
+    uintptr_t base=(uintptr_t)_mem_read_base_tab_ptr[address >> 8];
+    read_func_ptr_t read=_mem_read_tab_ptr[address >> 8];
+    cartridge_info_t *info=cartridge_get_info_list(); unsigned int i;
+    if(address<2 || c64_256k_enabled || plus256k_enabled || plus60k_enabled || !info)return 0;
+    for(i=0;i<512 && info[i].name;i++){
+        int t=info[i].crtid;
+        if(t!=CARTRIDGE_REU && t!=CARTRIDGE_GENERIC_8KB && t!=CARTRIDGE_GENERIC_16KB &&
+           t!=CARTRIDGE_MAGIC_DESK && t!=CARTRIDGE_EASYFLASH && cartridge_type_enabled(t))return 0;
+    }
+    if(i==512)return 0;
+    if(base==(uintptr_t)mem_ram)return 0x10000100u;
+    switch(mem_cartridge_type){
+      case CARTRIDGE_GENERIC_8KB:profile=1;break;case CARTRIDGE_GENERIC_16KB:profile=2;break;
+      case CARTRIDGE_MAGIC_DESK:profile=3;break;case CARTRIDGE_EASYFLASH:profile=4;break;default:return 0;
+    }
+    if(address>=0x8000 && address<0xa000 && read==roml_read){window=1;bank=roml_bank;}
+    if(address>=0xa000 && address<0xc000 && read==romh_read){window=2;bank=romh_bank;}
+    if(address>=0xe000 && read==ultimax_romh_read_hirom){window=3;bank=romh_bank;}
+    if(!window || bank>=(profile<=2?1u:64u))return 0;
+    if(profile==4){
+      uint8_t *flash;int start,limit;easyflash_mmu_translate(address,&flash,&start,&limit);
+      if(!flash || (uintptr_t)flash+(address&0xe000)!=(uintptr_t)(window==1?roml_banks:romh_banks)+bank*8192)return 0;
+    }
+    return 0x10000500u|(window<<12)|(bank<<16)|(profile<<24);
+}
+uint32_t mem_x64_debug_mapping(unsigned int address,unsigned int length)
+{
+    uint32_t identity;unsigned int i;
+    if(!length || length>8 || address>65536-length || !_mem_read_base_tab_ptr)return 0;
+    identity=x64_debug_space((uint16_t)address);
+    for(i=1;identity && i<length;i++)if(identity!=x64_debug_space((uint16_t)(address+i)))return 0;
+    return identity;
+}
+#endif

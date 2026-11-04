@@ -42,6 +42,11 @@
 #include "util.h"
 #include "p64.h"
 
+#ifdef WEB64_HOST_NATIVE
+#define X64_MEMORY_FILE_STDIO
+#include "arch/headless/x64-memory-file.h"
+#endif
+
 static log_t fsimage_p64_log = LOG_DEFAULT;
 
 /*-----------------------------------------------------------------------*/

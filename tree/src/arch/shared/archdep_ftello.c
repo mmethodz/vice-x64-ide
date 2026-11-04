@@ -30,6 +30,10 @@
 
 #include "archdep_ftello.h"
 
+#ifdef WEB64_HOST_NATIVE
+#include "arch/headless/x64-memory-file.h"
+#endif
+
 
 /** \brief  Get position in stream
  *
@@ -43,6 +47,9 @@
  */
 off_t archdep_ftello(FILE *stream)
 {
+#ifdef WEB64_HOST_NATIVE
+    if (x64_memory_file_stream(stream)) return (off_t)x64_memory_file_tell64(stream);
+#endif
 #ifdef HAVE_FTELLO
     return ftello(stream);
 #else

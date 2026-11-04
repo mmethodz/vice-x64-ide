@@ -52,6 +52,11 @@
 #include "snapshot.h"
 #include "util.h"
 
+#ifdef WEB64_HOST_NATIVE
+#define X64_MEMORY_FILE_STDIO
+#include "arch/headless/x64-memory-file.h"
+#endif
+
 #define EASYFLASH_N_BANK_BITS 6
 #define EASYFLASH_N_BANKS     (1 << (EASYFLASH_N_BANK_BITS))
 #define EASYFLASH_BANK_MASK   ((EASYFLASH_N_BANKS) -1)
@@ -389,7 +394,7 @@ int easyflash_cmdline_options_init(void)
 
 /* ---------------------------------------------------------------------*/
 
-#if defined(VICE_WEB) && defined(__EMSCRIPTEN__) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
+#if defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
 /* Capture-only provenance guard. Saturation stays unproven, never wraps. */
 uint32_t easyflash_web_profiler_generation;
 #endif
@@ -401,7 +406,7 @@ uint8_t easyflash_roml_read(uint16_t addr)
 
 void easyflash_roml_store(uint16_t addr, uint8_t value)
 {
-#if defined(VICE_WEB) && defined(__EMSCRIPTEN__) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
+#if defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
     if (easyflash_web_profiler_generation != UINT32_MAX) easyflash_web_profiler_generation++;
 #endif
     flash040core_store(easyflash_state_low, (easyflash_register_00 * 0x2000) + (addr & 0x1fff), value);
@@ -414,7 +419,7 @@ uint8_t easyflash_romh_read(uint16_t addr)
 
 void easyflash_romh_store(uint16_t addr, uint8_t value)
 {
-#if defined(VICE_WEB) && defined(__EMSCRIPTEN__) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
+#if defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
     if (easyflash_web_profiler_generation != UINT32_MAX) easyflash_web_profiler_generation++;
 #endif
     flash040core_store(easyflash_state_high, (easyflash_register_00 * 0x2000) + (addr & 0x1fff), value);

@@ -1,0 +1,346 @@
+{
+  "schema": "vice-x64-ide.public-review",
+  "version": 1,
+  "date": "2026-11-04",
+  "sourceId": "sha256:97f804e16e8f6b2ab8961a8327267621b848cbf7fcffab4bd422d81432f883ab",
+  "originalGitHead": "d7543be1cd5452d38eeccf020345490a2b34a2e7",
+  "baselineDescription": "Frozen Web64-modified VICE, not pristine upstream VICE. No parent x64 IDE Git history is imported.",
+  "baselineSrcFiles": 3021,
+  "publishedSrcFiles": 3034,
+  "sourceReceipt": "prepared.json",
+  "patchSeries": [
+    {
+      "path": "patches/0001-native-host.patch",
+      "sha256": "sha256:26059ac785b630ebc46c191c6c67c0bffed689ce2511feea98095876bd824ccc"
+    },
+    {
+      "path": "patches/0002-native-pacing.patch",
+      "sha256": "sha256:13fc832921bbd2feb85a2ebe673c9aff3b7aefbcaf3971377026e94bb27c7284"
+    },
+    {
+      "path": "patches/0003-profiler-byte-generations.patch",
+      "sha256": "sha256:a71fa3d5df3953edbe0fb02c001417f246e605d4fa3fbf22fd7c611ad8744ef1"
+    },
+    {
+      "path": "patches/0004-debugger-bank-actions.patch",
+      "sha256": "sha256:a4bb55ec566a1d8bf9dc802f41efeafced522f4a1e970f7a7c3d1be98e7ecba7"
+    }
+  ],
+  "sourceCheck": "emulator/prepare-native.py --check and --prepare in the owning checkout verified all current src bytes against the frozen capture plus four exact-context patches. The latter refreshed an older three-patch receipt without changing source bytes.",
+  "changes": [
+    {
+      "path": "tree/src/6510dtvcore.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:c0d2590b861f8beca78566bb4c5ba63f8d1f2a1be008fb5e8b5f393d7b8dbb4d",
+      "publishedSha256": "sha256:d094b9928971a5b1e90af08fe687220dff824c97ae3c74b6152d686783cb9977"
+    },
+    {
+      "path": "tree/src/arch/headless/main.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:b410199d07d5e42bd06b0d4720af33719f635afd59f7cd8896d7b4c9543cc2c3",
+      "publishedSha256": "sha256:d9e81d90bdd578748a76ff8f26e8ca539b4057ce68fa28cd30b755669ce2e4a2"
+    },
+    {
+      "path": "tree/src/arch/headless/ui.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:011e2015353004b81dae902217dd50600cda3247a45609ea6b51024d4a41ead8",
+      "publishedSha256": "sha256:4cb2c070caf9f25b9326250507ebccac253bc3411b7f426eb04f37287c7fa02f"
+    },
+    {
+      "path": "tree/src/arch/headless/video.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:4be375af1b8b6759ad1ff6d155c26e1621f69603a7d029a727aa0af6d350bef7",
+      "publishedSha256": "sha256:0f82e5b9f195ade0be252eb1b17d877cc4c8f00603fee5e5b8b04762aa89e822"
+    },
+    {
+      "path": "tree/src/arch/headless/vsyncarch.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:c4008e340faf4a800578fb4fe856d43de401631e0618f234214522138af0b2e2",
+      "publishedSha256": "sha256:9870fa175be7db3dfab224441ea696744377c6f1604e5795fd9d25146cd80867"
+    },
+    {
+      "path": "tree/src/arch/headless/web64-frame-step.h",
+      "kind": "modified",
+      "baselineSha256": "sha256:8f8aaec24c5e8391910221bf4eda055dca284cd44d0c7d81b08ba0aa4fe06820",
+      "publishedSha256": "sha256:b46a77f3a99a7d9dcbdd8c1e6bee47ec5b9ae427fe1f3b148538b97f5416b272"
+    },
+    {
+      "path": "tree/src/arch/headless/x64-memory-file-impl.h",
+      "kind": "added",
+      "baselineSha256": null,
+      "publishedSha256": "sha256:4ec0971030dbcc5121a5993484feb4c311c52c6d69aef704853a903a864c643f"
+    },
+    {
+      "path": "tree/src/arch/headless/x64-memory-file.h",
+      "kind": "added",
+      "baselineSha256": null,
+      "publishedSha256": "sha256:95054c16d1acd5078c6ed8f7b6711407f2a53de5056ed4d5bc901458cca5457d"
+    },
+    {
+      "path": "tree/src/arch/headless/x64-native-audio-host-api.h",
+      "kind": "added",
+      "baselineSha256": null,
+      "publishedSha256": "sha256:e8c77426d80ab5049b52a41c367396de8756fcbe25e02a5bdd4b43a5a49f945d"
+    },
+    {
+      "path": "tree/src/arch/headless/x64-native-audio-host-impl.h",
+      "kind": "added",
+      "baselineSha256": null,
+      "publishedSha256": "sha256:47a575e33a96821c99626cee68ba1cb99c3096d854f80247b0c4c73ff71ca512"
+    },
+    {
+      "path": "tree/src/arch/headless/x64-native-audio-host.h",
+      "kind": "added",
+      "baselineSha256": null,
+      "publishedSha256": "sha256:4cd5e552afe67115cb0c13fbb30198016560c769f869d152fd07b0d966379de3"
+    },
+    {
+      "path": "tree/src/arch/headless/x64-native-delivery-impl.h",
+      "kind": "added",
+      "baselineSha256": null,
+      "publishedSha256": "sha256:5189b69a3cfd057b91fc15223a4108d9e7a0c5466a5318e97e8d994430839353"
+    },
+    {
+      "path": "tree/src/arch/headless/x64-native-delivery.h",
+      "kind": "added",
+      "baselineSha256": null,
+      "publishedSha256": "sha256:7a9f52082e7256c15213f279bb4c05454d1f696cdff7ba425880df57327ba45c"
+    },
+    {
+      "path": "tree/src/arch/headless/x64-native-host-impl.h",
+      "kind": "added",
+      "baselineSha256": null,
+      "publishedSha256": "sha256:164f9c2335d91fb70b54c5e3606fb88bf30845d8cb2493132e17bdd73511dbbb"
+    },
+    {
+      "path": "tree/src/arch/headless/x64-native-host.h",
+      "kind": "added",
+      "baselineSha256": null,
+      "publishedSha256": "sha256:a47412daf2b123ea5352d43636dbd0f5db964c1e5c3b5c22a638f40be8a7758b"
+    },
+    {
+      "path": "tree/src/arch/headless/x64-native-launch-permit.h",
+      "kind": "added",
+      "baselineSha256": null,
+      "publishedSha256": "sha256:2e9d72755aa12f6a8308371cce104ad8e660d8ef536f8c548b692b1338826400"
+    },
+    {
+      "path": "tree/src/arch/headless/x64-native-media-impl.h",
+      "kind": "added",
+      "baselineSha256": null,
+      "publishedSha256": "sha256:5a67510cc01b425db38f7b83c92578d8921da854e4bc0698959f51ee5b3f6378"
+    },
+    {
+      "path": "tree/src/arch/shared/archdep_access.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:e87a72ab7685ff6b5ff613caeaa4ce573680a4246f9d69050dd2e958c94f258b",
+      "publishedSha256": "sha256:a327c63abea408f1777afdfd6fb7d9a6a9b9d702e9083c544e144655e0eda150"
+    },
+    {
+      "path": "tree/src/arch/shared/archdep_expand_path.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:48a6c0b12fea8075245e0a12c40914f45bd84c344c7d0a82b675b9fcfa15ef63",
+      "publishedSha256": "sha256:7d800c102633453a1cb2cc2af9240d7981d152979c150258b595faeb872dc656"
+    },
+    {
+      "path": "tree/src/arch/shared/archdep_file_size.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:4f9d282c83ccec61616fb1450ea7c7d211f631d1de1afbcf0b4ab592167db394",
+      "publishedSha256": "sha256:a0f382200e1447e5c29d4d2833f6402bcc65aa15db8c3e1f64428a8fd8b8537a"
+    },
+    {
+      "path": "tree/src/arch/shared/archdep_fseeko.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:b06c9f5560fa713708b9de0f5b3e1e67bd74adaf7cd1b35407e2e6b74367ee54",
+      "publishedSha256": "sha256:4e43c263bf0d31d442c474508c4edfb4d4e108fba771ac73d7dd874d0164b92b"
+    },
+    {
+      "path": "tree/src/arch/shared/archdep_ftello.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:ddb54fdf7dae613d24bfc0aaa811e3dd65647f7f7b4739ef38f73c9da112cab6",
+      "publishedSha256": "sha256:bcd0fbc1e5874e19ebb92cfa3935bd5da132c4a7132901c897094e1e8aceeeb4"
+    },
+    {
+      "path": "tree/src/arch/shared/archdep_path_is_relative.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:59f7954de487a81a980b203cc85c98a4013ac06e0e44dd90bba77f4264e2a036",
+      "publishedSha256": "sha256:bdad18e61020f9b17f14f0ab15ba27ab699c1693374819b3363914d7c77d6c1d"
+    },
+    {
+      "path": "tree/src/arch/shared/archdep_real_path.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:ef11011d7c7e33011f20dda5777db4914376f6c70d20fccaa96085beb4ec25b0",
+      "publishedSha256": "sha256:d6f0b6798a95146585ccc6bffb2f4137725ba07a9f7b7fa3714e830e9370e624"
+    },
+    {
+      "path": "tree/src/arch/shared/archdep_remove.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:3e9d5b55edb72cb396a10bdd38c79447970011cd52c3e99e2fb84610297287eb",
+      "publishedSha256": "sha256:9ba3d472a8e805dbdf7e6031295f5807422e2ab8b6f0e031e81de8a5d95b2481"
+    },
+    {
+      "path": "tree/src/arch/shared/archdep_stat.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:8f72ff25629d91a4e3566c8ad2c6c83c2184c5ce275eb882d0c54a3caebcd9ef",
+      "publishedSha256": "sha256:f640a78325cc40b3fa41751ff659e220bc3121d630ced9a78d4281fdab67e2ff"
+    },
+    {
+      "path": "tree/src/arch/shared/archdep_tick.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:cd7873e5d3cf2cb1fa632f03d43afa2f23469e3063bbd1bf55a5c8491facb1be",
+      "publishedSha256": "sha256:5f93af14ff1261cfd0758a835bb42fcd93bdcd8b4e06bd74776fc23ef0f79e50"
+    },
+    {
+      "path": "tree/src/arch/shared/sounddrv/sounddummy.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:d69873a33d2e47908ae4b615a45d226e8840b721233eb26be9974c00841170b1",
+      "publishedSha256": "sha256:ba6a9a994210c012c91fae13eb9a21405a19a8d38d7309d4397a2f0b54aad29a"
+    },
+    {
+      "path": "tree/src/arch/shared/sounddrv/x64-audio-native.h",
+      "kind": "added",
+      "baselineSha256": null,
+      "publishedSha256": "sha256:1b02a38d437e9fe7dbeaeebf4eabc998f16d704530025e5ce2759729ccecc65e"
+    },
+    {
+      "path": "tree/src/c64/c64memsc.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:b8b77f4808f756e48007c6d4943e137a3c96dac8f11d9b56dbb68ce38d57a615",
+      "publishedSha256": "sha256:c47e3d14c92aec8db8b06471255125ba15ade3776d6f7863340929d98b3cd025"
+    },
+    {
+      "path": "tree/src/c64/cart/c64cart.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:3ee4da7db756f945edf602792ed6fff5780e16f6a623ecef081e66b9aa8723b7",
+      "publishedSha256": "sha256:1f2391e92181f297f952dbb55ef627bb92b503c8e526a6dcf0999cd41e4c78f6"
+    },
+    {
+      "path": "tree/src/c64/cart/easyflash.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:3eaa9b61c47c507ff85f656828a41459f39e706f75ba633f2d5336fc142a87ed",
+      "publishedSha256": "sha256:3fdbb631167d72b444c2859db502cb826915a9407ce46cf5323248e93f4ec290"
+    },
+    {
+      "path": "tree/src/c64/cart/reu.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:a6abf7e617bb1c0e83669a93532e403c7b381e8671b95358d18f8ff57a7f329a",
+      "publishedSha256": "sha256:ceed8472ba8fbbec2875890178639eecdb31e077d9baf7d77e633bca0ceb9d58"
+    },
+    {
+      "path": "tree/src/c64/web64-profiler-memory-impl.h",
+      "kind": "modified",
+      "baselineSha256": "sha256:fbafd23dd68ad934cf9a442fd1b91821c2fe80f79fdfad4259305d68440b9d7f",
+      "publishedSha256": "sha256:2c52becf347f36d2f9fbaf2f31ad862abbc9115b4e0a886dd98ef00bb3c5b4ae"
+    },
+    {
+      "path": "tree/src/c64/web64-profiler-native.h",
+      "kind": "modified",
+      "baselineSha256": "sha256:527e3a0dd2f1d8da67454b5eb32473a439f5014e074945a9e7b04c1f9ae75e28",
+      "publishedSha256": "sha256:73d2114272e40008e8018e9b3f46eb9b5d37a74443091cdeb796c82e72708620"
+    },
+    {
+      "path": "tree/src/c64/x64-profiler-native.h",
+      "kind": "added",
+      "baselineSha256": null,
+      "publishedSha256": "sha256:4798bac3cfaa9d101f38ad701ca295bf04b6ced41b89cfff0f16c3f8b1a1b11d"
+    },
+    {
+      "path": "tree/src/crt.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:5adb671b93510de825b7eb1d403528b4db444949f311f1b334097289163dfdb0",
+      "publishedSha256": "sha256:f9b574dda6e870267eb66a51dada1c976d4ed9203c10eddc380fee2fb6b0149b"
+    },
+    {
+      "path": "tree/src/diskimage/fsimage-check.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:ffdcac825ed79140885fd8e1d872d762fa65f4ffdcd1cd92711f0108164153c3",
+      "publishedSha256": "sha256:ea8229a8148a32a32a74d93ac1120987b0f1719039865d2e06a4750216b0acbf"
+    },
+    {
+      "path": "tree/src/diskimage/fsimage-create.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:dddfed2d9fb05aeb8b5eec8ef4b18963465a8936ad56a09ce8f9110fd9820504",
+      "publishedSha256": "sha256:166985298ff5760b610ca8f2b328598e3d43416927c617a9ea6720bf1001d365"
+    },
+    {
+      "path": "tree/src/diskimage/fsimage-dxx.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:7d2dad50eeee65644de0ee2a45954ea5e7310474148cbf96b7ab18f787ca838e",
+      "publishedSha256": "sha256:20493371cb2ab2d4b427eb04f462e252a552bf9100c9b4df0dde95841faf82c2"
+    },
+    {
+      "path": "tree/src/diskimage/fsimage-gcr.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:2b15e5a7ee929034f639a3557559eeebd7de0067a12a94fec0dae35a9f068236",
+      "publishedSha256": "sha256:2b3b0f96c6812f77107ef0178b7a320e7b3a0432fcc31ed0433805e76dbb1811"
+    },
+    {
+      "path": "tree/src/diskimage/fsimage-p64.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:f6571c8cb0954d3dcc6317504b2fbb450d7e0d319ecfbc505a4018d0a6a4953e",
+      "publishedSha256": "sha256:91f1ed8dfe1cb5725d718207c33b8ad67aa0382d4bb7fe60aedec5b6ce345d15"
+    },
+    {
+      "path": "tree/src/diskimage/fsimage-probe.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:535aad5521d4b077e68cc00fe76f49f6ecb8e31ba82a235cf66e15da1a7faea7",
+      "publishedSha256": "sha256:6178a6df930aee0f872d2e99b348a81c42aec9760486fca7c59e560e20dab268"
+    },
+    {
+      "path": "tree/src/diskimage/fsimage.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:b97b619ef0390f74a77294c5c29a84521df442333625b966f01f438ddf16690e",
+      "publishedSha256": "sha256:9809c46caa2ea0b483818d5b0ec48806d8ce3c39d8fa528c464a447d1f766084"
+    },
+    {
+      "path": "tree/src/mainc64cpu.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:9a8986435931d00f04a31ce5b8f8678011ab9750c8bc022eabeb31d210ad9a26",
+      "publishedSha256": "sha256:fa318e72b09efdab21d843bdfbb327e6ad7cb8906b1fac9d8d3039493ce447ff"
+    },
+    {
+      "path": "tree/src/sound.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:95fc9dc37c9643cae0957b95a47ca8e0e63413bc7a235a3638f2be07ee816720",
+      "publishedSha256": "sha256:d0c782e345a9df0b4c5c3663516d283f612e31cb63923fa1e8706b85d3602dc8"
+    },
+    {
+      "path": "tree/src/sound.h",
+      "kind": "modified",
+      "baselineSha256": "sha256:7442bf7b1440fc65af2c1176f51174e421ae99e84245ba706f361454cba039b5",
+      "publishedSha256": "sha256:2e82d72a850b1e12a04b340de8ad04230d248ece07d52d2de15350a257da450e"
+    },
+    {
+      "path": "tree/src/util.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:cfff1581ec5723c572190d97eafc3beafdb371b9f9e6807f4304262e30353311",
+      "publishedSha256": "sha256:54320bbc21beb2e6aba1a94ee031f99b758b826255db4d5a2721b9b50e14b3e2"
+    },
+    {
+      "path": "tree/src/viciisc/vicii-cycle.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:3cf68efccc4d3d15e1f94e6a2bf753c3e32bad0d1fb6fe3338e8559465bde0ff",
+      "publishedSha256": "sha256:695e95a01da06011ae18ad70ae7697a92074d01debd3a089f1a9d7187cade7d4"
+    },
+    {
+      "path": "tree/src/viciisc/vicii-cycle.h",
+      "kind": "modified",
+      "baselineSha256": "sha256:e4f52bd3e50df3aed17df4324fc96ee8e80958fde9ab1ac4567f7aa5fa64cd67",
+      "publishedSha256": "sha256:c6a22fd29630c3c17ce839f4fa7e69a99c1f954e3c2fabde4e677f6153bd2241"
+    },
+    {
+      "path": "tree/src/vsync.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:838475b447203960b964a08a14432111d8e5bd00d53a045cf759f3afd6265e01",
+      "publishedSha256": "sha256:1afc036b3c0e02be50971735b575ab73f0fba019963dfad32af804f81572ff87"
+    },
+    {
+      "path": "tree/src/zfile.c",
+      "kind": "modified",
+      "baselineSha256": "sha256:6c68064ebf5af612453578c3c7709a3e5043bb489e3c7571d48d53423855b7da",
+      "publishedSha256": "sha256:4e0cb5b18b5a23cb714495ee3481371b37db286527eaefd268cb67dcb1017de4"
+    }
+  ],
+  "scope": "Only the modified emulator source, its source provenance, review patch series and documentation. No x64 IDE application sources, Git history, executables or ROM/data payloads.",
+  "buildRecipe": "review/build-native.sh is the exact owning-project recipe; requires the separately staged full VICE Autotools/build support, which is not included in this source-only review snapshot."
+}

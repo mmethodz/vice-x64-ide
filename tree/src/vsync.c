@@ -489,7 +489,16 @@ static void update_performance_metrics(tick_t frame_tick)
 
 void vsync_do_end_of_line(void)
 {
+#ifdef WEB64_HOST_NATIVE
+    /* The native helper's sound device is not a timing source, so this sync
+     * paces the core. At 2 ms of host time between syncs the core emulates
+     * about 13 ms per burst and then sleeps; frames came 12 and 28 ms apart
+     * and audio reached the player in 13 ms clumps. Every 0.5 ms keeps the
+     * bursts to about 3 ms. Host timing only: guest bytes are unchanged. */
+    const int microseconds_between_sync = 500;
+#else
     const int microseconds_between_sync = 2 * 1000;
+#endif
 
     tick_t tick_between_sync = tick_per_second() / (1000000 / microseconds_between_sync);
     tick_t tick_now;

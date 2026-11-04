@@ -1,0 +1,221 @@
+--- a/src/arch/headless/main.c
++++ b/src/arch/headless/main.c
+@@ -263,9 +263,22 @@
+     VICE_WEB_BOOL = 23
+ };
+ 
++#ifdef WEB64_HOST_NATIVE
++extern uint32_t mem_x64_debug_mapping(unsigned int address,unsigned int length);
++static int x64_debug_mapping_matches(int mapping,int address,int length)
++{
++    if(((uint32_t)mapping & 0x10000000u) && mapping>=0)
++        return (uint32_t)mapping==mem_x64_debug_mapping((unsigned int)address,(unsigned int)(length?length:1));
++    return mapping<0 || mapping==mem_get_current_bank_config();
++}
++#endif
+ typedef struct vice_web_monitor_owner_s {
+     int active, address, mapping, byte_length, program_length, next;
+     int unavailable_count;
++#ifdef WEB64_HOST_NATIVE
++    uint64_t hits;
++    uint32_t hit_after, hit_every, log_only, suspended;
++#endif
+     unsigned char bytes[VICE_WEB_MONITOR_GUARD_BYTES];
+     int program[VICE_WEB_MONITOR_PROGRAM_LIMIT * 2];
+ } vice_web_monitor_owner_t;
+@@ -726,7 +739,13 @@
+     int slot;
+     vice_web_monitor_owner_t *owner;
+     if (address < 0 || address > 0xffff || memspace != e_comp_space ||
+-        mapping < -1 || mapping > 31 || byte_length < 0 || byte_length > VICE_WEB_MONITOR_GUARD_BYTES ||
++        mapping < -1 ||
++#ifndef WEB64_HOST_NATIVE
++        mapping > 31 ||
++#else
++        (mapping > 31 && !((uint32_t)mapping & 0x10000000u)) ||
++#endif
++        byte_length < 0 || byte_length > VICE_WEB_MONITOR_GUARD_BYTES ||
+         address + byte_length > 65536 || (byte_length && bytes == NULL) ||
+         !vice_web_monitor_program_valid(program, program_length)) return -1;
+     for (slot = 0; slot < VICE_WEB_MONITOR_OWNERS; slot++) {
+@@ -740,6 +759,9 @@
+     owner->byte_length = byte_length;
+     owner->program_length = program_length;
+     owner->unavailable_count = 0;
++#ifdef WEB64_HOST_NATIVE
++    owner->hits=0;owner->hit_after=1;owner->hit_every=1;owner->log_only=0;owner->suspended=0;
++#endif
+     if (byte_length) memcpy(owner->bytes, bytes, (size_t)byte_length);
+     if (program_length) memcpy(owner->program, program, (size_t)program_length * 2 * sizeof(int));
+     owner->next = vice_web_monitor_owner_head[address];
+@@ -789,6 +811,19 @@
+     return vice_web_monitor_owners[owner_id - 1].unavailable_count;
+ }
+ 
++#ifdef WEB64_HOST_NATIVE
++#define X64_DEBUG_LOG_CAP 256
++struct x64_debug_log { uint32_t owner,address,regs[5]; uint64_t hit; };
++static struct x64_debug_log x64_debug_logs[X64_DEBUG_LOG_CAP];
++static uint32_t x64_debug_log_count=0,x64_debug_log_dropped=0;
++static void x64_debug_log_hit(int owner_id,int address,uint64_t hit)
++{
++    struct x64_debug_log *entry;unsigned int i;
++    if(x64_debug_log_count==X64_DEBUG_LOG_CAP){if(x64_debug_log_dropped!=UINT32_MAX)x64_debug_log_dropped++;return;}
++    entry=&x64_debug_logs[x64_debug_log_count++];entry->owner=owner_id;entry->address=address;entry->hit=hit;
++    for(i=0;i<5;i++)entry->regs[i]=(uint32_t)vice_web_monitor_register_get((int)i+1);
++}
++#endif
+ int vice_web_monitor_breakpoint_guard_match(int memspace, int address)
+ {
+     int i, j, matched = 0, native_match = 0, owner_id;
+@@ -802,7 +837,13 @@
+     else for (i = 0; i < VICE_WEB_MONITOR_GUARDS; i++) {
+         const vice_web_monitor_guard_t *guard = &vice_web_monitor_guards[i];
+         if (!guard->active || guard->address != address || guard->memspace != memspace ||
+-            (guard->mapping >= 0 && guard->mapping != mem_get_current_bank_config())) {
++            (
++#ifdef WEB64_HOST_NATIVE
++             !x64_debug_mapping_matches(guard->mapping,address,guard->length)
++#else
++             guard->mapping >= 0 && guard->mapping != mem_get_current_bank_config()
++#endif
++            )) {
+             continue;
+         }
+         for (j = 0; j < guard->length; j++) {
+@@ -822,7 +863,13 @@
+         vice_web_monitor_owner_t *owner = &vice_web_monitor_owners[owner_id - 1];
+         const int next = owner->next;
+         int result = 0;
+-        if (owner->mapping < 0 || owner->mapping == mem_get_current_bank_config()) {
++        if (
++#ifdef WEB64_HOST_NATIVE
++            !owner->suspended && x64_debug_mapping_matches(owner->mapping,address,owner->byte_length)
++#else
++            owner->mapping < 0 || owner->mapping == mem_get_current_bank_config()
++#endif
++        ) {
+             for (j = 0; j < owner->byte_length; j++) {
+                 if (mem_peek_with_config(mem_get_current_bank_config(),
+                     (uint16_t)(address + j), NULL) != owner->bytes[j]) break;
+@@ -830,6 +877,11 @@
+             if (j == owner->byte_length) result = vice_web_monitor_filter(owner);
+         }
+         if (result > 0) {
++#ifdef WEB64_HOST_NATIVE
++            if(owner->hits!=UINT64_MAX)owner->hits++;
++            if(owner->hits<owner->hit_after || (owner->hits-owner->hit_after)%owner->hit_every){owner_id=next;continue;}
++            if(owner->log_only){x64_debug_log_hit(owner_id,address,owner->hits);owner_id=next;continue;}
++#endif
+             vice_web_monitor_matched_owner_ids[vice_web_monitor_matched_owner_count++] = owner_id;
+             native_match = 1;
+         } else if (result < 0 && owner->unavailable_count < 0x7fffffff) owner->unavailable_count++;
+--- a/src/arch/headless/x64-native-host-impl.h
++++ b/src/arch/headless/x64-native-host-impl.h
+@@ -288,7 +288,7 @@
+                 if (i == 11 || i == 12 || i == 13 || i == 14 || i == 34 || i == 35 || i == 41) continue;
+                 bitmap |= UINT64_C(1) << i;
+             }
+-            for (i = 51; i <= 63; ++i) bitmap |= UINT64_C(1) << i;
++            for (i = 49; i <= 63; ++i) bitmap |= UINT64_C(1) << i;
+             if (guard) { features |= UINT64_C(1) << 7; bitmap |= UINT64_C(1) << 41; }
+             if (snapshots) { features |= UINT64_C(1) << 8; bitmap |= (UINT64_C(1) << 34) | (UINT64_C(1) << 35); }
+ #if defined(ENABLE_PROFILER) && ENABLE_PROFILER
+@@ -382,6 +382,46 @@
+             for (length = 0; length <= 4096 && name[length]; ++length) {}
+             if (length > 4096) break;
+             x64_native_reply(op, request, 0, name, length); return;
++        }
++        case 49:
++            if(n!=24)break;
++            if(!x64_native_stop_matches(p)){result=-3;goto failed;}
++            x64_put32(small,mem_x64_debug_mapping(x64_get32(p+16),x64_get32(p+20)));
++            x64_native_reply(op,request,0,small,4);return;
++        case 50: {
++            uint32_t action,i,count=0;unsigned char *buffer;
++            if(n<4)break;action=x64_get32(p);
++            if(action==0){
++                vice_web_monitor_owner_t *owner;uint32_t id;
++                if(n!=20)break;id=x64_get32(p+4);
++                if(id<1 || id>VICE_WEB_MONITOR_OWNERS || !vice_web_monitor_owners[id-1].active ||
++                  !x64_get32(p+8) || !x64_get32(p+12) || x64_get32(p+16)>1)break;
++                owner=&vice_web_monitor_owners[id-1];owner->hit_after=x64_get32(p+8);
++                owner->hit_every=x64_get32(p+12);owner->log_only=x64_get32(p+16);
++                x64_native_reply(op,request,0,NULL,0);return;
++            }
++            if(action==2){
++                uint32_t id;if(n!=12)break;id=x64_get32(p+4);
++                if(id<1 || id>VICE_WEB_MONITOR_OWNERS || !vice_web_monitor_owners[id-1].active || x64_get32(p+8)>1)break;
++                vice_web_monitor_owners[id-1].suspended=x64_get32(p+8);
++                x64_native_reply(op,request,0,NULL,0);return;
++            }
++            if(action!=1 || n!=4)break;
++            for(i=0;i<VICE_WEB_MONITOR_OWNERS;i++)if(vice_web_monitor_owners[i].active)count++;
++            buffer=malloc(12+count*12+x64_debug_log_count*36);if(!buffer){result=-5;goto failed;}
++            x64_put32(buffer,count);x64_put32(buffer+4,x64_debug_log_count);x64_put32(buffer+8,x64_debug_log_dropped);
++            count=12;
++            for(i=0;i<VICE_WEB_MONITOR_OWNERS;i++)if(vice_web_monitor_owners[i].active){
++                x64_put32(buffer+count,i+1);x64_put64(buffer+count+4,vice_web_monitor_owners[i].hits);count+=12;
++            }
++            for(i=0;i<x64_debug_log_count;i++){
++                struct x64_debug_log *entry=&x64_debug_logs[i];unsigned int j;
++                x64_put32(buffer+count,entry->owner);x64_put32(buffer+count+4,entry->address);
++                x64_put64(buffer+count+8,entry->hit);
++                for(j=0;j<5;j++)x64_put32(buffer+count+16+j*4,entry->regs[j]);count+=36;
++            }
++            x64_debug_log_count=x64_debug_log_dropped=0;
++            x64_native_reply(op,request,0,buffer,count);free(buffer);return;
+         }
+         case 5:
+             if (n || vice_web_frame_step_arm(vice_web_monitor_register_get(0),
+--- a/src/c64/c64memsc.c
++++ b/src/c64/c64memsc.c
+@@ -1549,3 +1549,48 @@
+ {
+     c64scui_shutdown();
+ }
++
++#ifdef WEB64_HOST_NATIVE
++#include "easyflash.h"
++extern int roml_bank, romh_bank;
++extern uint8_t *roml_banks, *romh_banks;
++extern int mem_cartridge_type;
++/* Cold debugger identity: actual read dispatch and bank latch, no profiler arm.
++ * Unsupported expansion or transient flash reads are unknown, never RAM. */
++static uint32_t x64_debug_space(uint16_t address)
++{
++    uint32_t profile=0, window=0, bank=0;
++    uintptr_t base=(uintptr_t)_mem_read_base_tab_ptr[address >> 8];
++    read_func_ptr_t read=_mem_read_tab_ptr[address >> 8];
++    cartridge_info_t *info=cartridge_get_info_list(); unsigned int i;
++    if(address<2 || c64_256k_enabled || plus256k_enabled || plus60k_enabled || !info)return 0;
++    for(i=0;i<512 && info[i].name;i++){
++        int t=info[i].crtid;
++        if(t!=CARTRIDGE_REU && t!=CARTRIDGE_GENERIC_8KB && t!=CARTRIDGE_GENERIC_16KB &&
++           t!=CARTRIDGE_MAGIC_DESK && t!=CARTRIDGE_EASYFLASH && cartridge_type_enabled(t))return 0;
++    }
++    if(i==512)return 0;
++    if(base==(uintptr_t)mem_ram)return 0x10000100u;
++    switch(mem_cartridge_type){
++      case CARTRIDGE_GENERIC_8KB:profile=1;break;case CARTRIDGE_GENERIC_16KB:profile=2;break;
++      case CARTRIDGE_MAGIC_DESK:profile=3;break;case CARTRIDGE_EASYFLASH:profile=4;break;default:return 0;
++    }
++    if(address>=0x8000 && address<0xa000 && read==roml_read){window=1;bank=roml_bank;}
++    if(address>=0xa000 && address<0xc000 && read==romh_read){window=2;bank=romh_bank;}
++    if(address>=0xe000 && read==ultimax_romh_read_hirom){window=3;bank=romh_bank;}
++    if(!window || bank>=(profile<=2?1u:64u))return 0;
++    if(profile==4){
++      uint8_t *flash;int start,limit;easyflash_mmu_translate(address,&flash,&start,&limit);
++      if(!flash || (uintptr_t)flash+(address&0xe000)!=(uintptr_t)(window==1?roml_banks:romh_banks)+bank*8192)return 0;
++    }
++    return 0x10000500u|(window<<12)|(bank<<16)|(profile<<24);
++}
++uint32_t mem_x64_debug_mapping(unsigned int address,unsigned int length)
++{
++    uint32_t identity;unsigned int i;
++    if(!length || length>8 || address>65536-length || !_mem_read_base_tab_ptr)return 0;
++    identity=x64_debug_space((uint16_t)address);
++    for(i=1;identity && i<length;i++)if(identity!=x64_debug_space((uint16_t)(address+i)))return 0;
++    return identity;
++}
++#endif

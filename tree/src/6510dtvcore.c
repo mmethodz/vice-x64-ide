@@ -71,6 +71,17 @@
 #define WEB64_FRAME_STEP_RESET() do { } while (0)
 #endif
 
+#if defined(WEB64_HOST_NATIVE) && !defined(DRIVE_CPU)
+#include "arch/headless/x64-native-host.h"
+#define X64_NATIVE_RESET_APPLIED() do { \
+    EXPORT_REGISTERS(); \
+    x64_native_reset_applied(); \
+    IMPORT_REGISTERS(); \
+} while (0)
+#else
+#define X64_NATIVE_RESET_APPLIED() do { } while (0)
+#endif
+
 #ifndef C64DTV
 /* The C64DTV can use different shadow registers for accu read/write. */
 /* For standard 6510, this is not the case. */
@@ -444,6 +455,7 @@
                 CHECK_PROFILE_INTERRUPT(addr, 0xfffc);                         \
                 JUMP(addr);                                                    \
                 DMA_ON_RESET;                                                  \
+                X64_NATIVE_RESET_APPLIED();                                    \
             }                                                                  \
         }                                                                      \
         if (ik & (IK_MONITOR | IK_DMA)) {                                      \
@@ -1794,7 +1806,7 @@ static const uint8_t fetch_tab[] = {
 
     {
         opcode_t opcode;
-#if defined(VICE_WEB) && defined(__EMSCRIPTEN__) && !defined(DRIVE_CPU)
+#if defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)) && !defined(DRIVE_CPU)
         /* The VIC can cross the frame edge during an instruction or stolen
          * cycles. Stop only here, after monitor/interrupt handling and before
          * the next opcode fetch. A monitor stop at this boundary wins. */

@@ -1,0 +1,38 @@
+--- a/src/c64/web64-profiler-memory-impl.h
++++ b/src/c64/web64-profiler-memory-impl.h
+@@ -15,7 +15,7 @@
+ #endif
+ 
+ typedef struct {
+-    uint32_t ticket, active, valid, stock, serial, page[256];
++    uint32_t ticket, active, valid, stock, serial, byte_generation[65536];
+     uint32_t cart_profile, cart_bytes, flash_generation, flash_pending;
+     uint8_t *cart_baseline;
+     uint8_t baseline[65536];
+@@ -27,9 +27,10 @@
+     w64p_memory_t *m = web64_memory;
+     if (!m || !m->active) return;
+     if (m->serial == UINT32_MAX) { m->valid = 0; return; }
+-    /* Page granularity may split extra identities, but cannot miss a write,
+-     * including same-value writes and operands subsequently restored. */
+-    m->page[addr >> 8] = ++m->serial;
++    /* x64: exact byte generations keep unrelated data writes on a code
++     * page from invalidating instructions. Same-value writes and restored
++     * operands still advance identity; no guest reads are added. */
++    m->byte_generation[addr] = ++m->serial;
+ }
+ 
+ static void web64_memory_ram_store(uint16_t addr, uint8_t value)
+@@ -229,8 +230,10 @@
+         return o;
+     }
+     if (space != W64P_SPACE_RAM) return o; /* ROM trap/patch generations unproven */
+-    generation = m->page[pc >> 8];
+-    tail = m->page[(uint16_t)(pc + 2) >> 8];
++    generation = m->byte_generation[pc];
++    tail = m->byte_generation[(uint16_t)(pc + 1)];
++    if (tail > generation) generation = tail;
++    tail = m->byte_generation[(uint16_t)(pc + 2)];
+     o.generation = generation > tail ? generation : tail;
+     o.flags = 0;
+     return o;

@@ -56,6 +56,11 @@
 
 #include "util.h"
 
+#ifdef WEB64_HOST_NATIVE
+#define X64_MEMORY_FILE_STDIO
+#include "arch/headless/x64-memory-file.h"
+#endif
+
 
 /* #define DBGUTIL */
 

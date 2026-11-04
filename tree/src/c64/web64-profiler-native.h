@@ -1,11 +1,17 @@
 /* x64sc adapter for the bounded observer ledger. GPL-2.0-or-later.
- * Included by c64cpusc.c only. Native ABI 2 is deliberately distinct from the
+ * Included by c64cpusc.c only. Native ABI 3 is deliberately distinct from the
  * portable W64P export envelope; the worker validates/copies these tables.
  */
 /* Normal builds must omit the observer entirely, not branch around it. */
-#if (defined(VICE_WEB) && defined(__EMSCRIPTEN__) && defined(ENABLE_PROFILER) && ENABLE_PROFILER) || defined(W64P_NATIVE_HOST_TEST)
+#if (defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)) && defined(ENABLE_PROFILER) && ENABLE_PROFILER) || defined(W64P_NATIVE_HOST_TEST)
 #ifndef W64P_NATIVE_HOST_TEST
+#ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
+#else
+#ifndef EMSCRIPTEN_KEEPALIVE
+#define EMSCRIPTEN_KEEPALIVE
+#endif
+#endif
 #include "mem.h"
 #include "viciitypes.h"
 #endif
@@ -219,11 +225,13 @@ EMSCRIPTEN_KEEPALIVE const uint32_t *vice_web_profiler_info(void)
     p[5] = c->reason;
     p[8] = c->frames;
     p[11] = c->count;
-    p[13] = (uint32_t)(uintptr_t)c->records;
     p[14] = c->pc_count;
+#ifndef WEB64_HOST_NATIVE
+    p[13] = (uint32_t)(uintptr_t)c->records;
     p[16] = (uint32_t)(uintptr_t)c->pcs;
     p[17] = (uint32_t)(uintptr_t)c->frame;
     p[19] = (uint32_t)(uintptr_t)c->line;
+#endif
     p[20] = c->frames * c->lines;
     p[22] = c->owned;
     p[23] = c->capacity;
@@ -236,14 +244,103 @@ EMSCRIPTEN_KEEPALIVE const uint32_t *vice_web_profiler_info(void)
     p[33] = c->has_clock;
     p[34] = web64_profiler_capture_epoch;
     p[36] = c->mode;
-    p[40] = (uint32_t)(uintptr_t)mem_web_profiler_baseline();
     p[41] = 65536;
     p[42] = (uint32_t)web64_profiler_arm_clock;
     p[43] = (uint32_t)(web64_profiler_arm_clock >> 32);
+#ifndef WEB64_HOST_NATIVE
+    p[40] = (uint32_t)(uintptr_t)mem_web_profiler_baseline();
     p[44] = (uint32_t)(uintptr_t)mem_web_profiler_cartridge_baseline();
+#endif
     p[45] = mem_web_profiler_cartridge_bytes();
     return p;
 }
+
+#ifdef WEB64_HOST_NATIVE
+#include "x64-profiler-native.h"
+
+int x64_profiler_info(uint32_t out[X64_PROFILER_INFO_WORDS])
+{
+    if (!out) return 0;
+    memcpy(out, vice_web_profiler_info(), sizeof(web64_profiler_info));
+    return 1;
+}
+
+/* The descriptor is inspected and copied on the same core thread, without
+ * advancing the emulator or dispatching another command between operations.
+ * These are ledger-owned buffers; this adapter never allocates or publishes
+ * another owner and never changes capture state. */
+static int x64_profiler_descriptor(uint32_t id, const void **data, size_t *length)
+{
+    const w64p_ledger_t *c = web64_profiler;
+    size_t count = 0, stride = 1, limit = W64P_SUMMARY_BYTES;
+    uint64_t detail_bytes;
+    *data = NULL;
+    *length = 0;
+    if (id < X64_PROFILER_RECORDS || id > X64_PROFILER_CARTRIDGE) return 0;
+    if (!c) return 1;
+    detail_bytes = (uint64_t)c->capacity * sizeof(w64p_record_t);
+    if (c->frames < 1 || c->frames > W64P_MAX_FRAMES ||
+        c->lines < 1 || c->lines > W64P_MAX_LINES ||
+        c->count > c->capacity || c->pc_count > W64P_MAX_PCS ||
+        detail_bytes > W64P_DETAIL_BYTES || detail_bytes > c->owned ||
+        (uint64_t)c->owned - detail_bytes > W64P_SUMMARY_BYTES) return 0;
+    switch (id) {
+        case X64_PROFILER_RECORDS:
+            *data = c->records;
+            count = c->count;
+            stride = sizeof(*c->records);
+            limit = W64P_DETAIL_BYTES;
+            break;
+        case X64_PROFILER_PCS:
+            *data = c->pcs;
+            count = c->pc_count;
+            stride = sizeof(*c->pcs);
+            break;
+        case X64_PROFILER_FRAMES:
+            *data = c->frame;
+            count = c->frames;
+            stride = sizeof(*c->frame);
+            break;
+        case X64_PROFILER_LINES:
+            *data = c->line;
+            count = (size_t)c->frames * c->lines;
+            stride = sizeof(*c->line);
+            break;
+        case X64_PROFILER_RAM:
+            *data = mem_web_profiler_baseline();
+            count = 65536;
+            break;
+        case X64_PROFILER_CARTRIDGE:
+            *data = mem_web_profiler_cartridge_baseline();
+            count = mem_web_profiler_cartridge_bytes();
+            break;
+    }
+    if (count > limit / stride || (count && !*data)) {
+        *data = NULL;
+        return 0;
+    }
+    *length = count * stride;
+    return 1;
+}
+
+const void *x64_profiler_buffer(uint32_t id, size_t *length)
+{
+    const void *data;
+    if (!length) return NULL;
+    if (!x64_profiler_descriptor(id, &data, length)) return NULL;
+    return data;
+}
+
+int x64_profiler_copy(uint32_t id, size_t offset, void *out, size_t length)
+{
+    const void *data;
+    size_t available;
+    if (!x64_profiler_descriptor(id, &data, &available) ||
+        offset > available || length > available - offset || (length && !out)) return 0;
+    if (length) memcpy(out, (const uint8_t *)data + offset, length);
+    return 1;
+}
+#endif
 
 /* One local ticket per native interval. Disabled: no fetch hook, allocations,
  * source work or transport. A host command during Asyncify suspension cannot

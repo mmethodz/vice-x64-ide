@@ -44,6 +44,10 @@
 
 #include "archdep_remove.h"
 
+#ifdef WEB64_HOST_NATIVE
+#include "arch/headless/x64-memory-file.h"
+#endif
+
 
 /** \brief  Remove a file
  *
@@ -53,6 +57,9 @@
  */
 int archdep_remove(const char *path)
 {
+#ifdef WEB64_HOST_NATIVE
+    if (x64_memory_file_reserved(path)) return x64_memory_file_remove(path);
+#endif
 #if defined(UNIX_COMPILE) || defined(HAIKU_COMPILE)
     return unlink(path);
 #elif defined(WINDOWS_COMPILE)

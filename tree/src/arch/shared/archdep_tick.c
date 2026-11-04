@@ -67,6 +67,17 @@ void tick_init(void)
 #ifdef WINDOWS_COMPILE
     QueryPerformanceFrequency(&timer_frequency);
 
+#ifdef WEB64_HOST_NATIVE
+    /* The headless helper never raises the timer resolution (only the GTK UI
+     * calls timeBeginPeriod), so an ordinary waitable timer wakes on the
+     * default 15.6 ms tick and the core runs in bursts: frames 3, 16 or 31 ms
+     * apart instead of 20. A high-resolution timer keeps each vsync sleep to
+     * the time asked for, whatever the process timer resolution. */
+    wait_timer = CreateWaitableTimerExW(NULL, NULL,
+                                        CREATE_WAITABLE_TIMER_MANUAL_RESET | CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                        TIMER_ALL_ACCESS);
+    if (wait_timer == NULL)
+#endif
     wait_timer = CreateWaitableTimer(NULL, TRUE, NULL);
 
 #elif defined(MACOS_COMPILE)

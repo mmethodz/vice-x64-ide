@@ -41,6 +41,10 @@
 
 #include "archdep_stat.h"
 
+#ifdef WEB64_HOST_NATIVE
+#include "arch/headless/x64-memory-file.h"
+#endif
+
 
 /** \brief  Determine the size of \a path and whether it's a directory
  *
@@ -53,6 +57,10 @@
 int archdep_stat(const char *path, size_t *len, unsigned int *isdir)
 {
     struct stat statbuf;
+
+#ifdef WEB64_HOST_NATIVE
+    if (x64_memory_file_reserved(path)) return x64_memory_file_stat(path, len, isdir);
+#endif
 
     if (stat(path, &statbuf) < 0) {
         if (len != NULL) {

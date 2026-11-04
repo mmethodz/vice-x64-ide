@@ -268,7 +268,7 @@ int sound_cmdline_options_init(void);
 /* device initialization prototypes */
 int sound_init_alsa_device(void);
 int sound_init_dummy_device(void);
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)
 int sound_init_web_device(void);
 #endif
 int sound_init_dump_device(void);

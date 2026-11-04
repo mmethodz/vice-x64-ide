@@ -31,7 +31,7 @@ int vicii_cycle(void);
 int vicii_cycle_reu(void);
 void vicii_steal_cycles(void);
 
-#if defined(VICE_WEB) && defined(__EMSCRIPTEN__) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
+#if defined(VICE_WEB) && (defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)) && defined(ENABLE_PROFILER) && ENABLE_PROFILER
 #include "types.h"
 /* Only actual CPU-blocked cycles, never a per-cycle browser/JS callback. */
 extern void (*vicii_web_cpu_stall_observer)(CLOCK clock, unsigned int cause);

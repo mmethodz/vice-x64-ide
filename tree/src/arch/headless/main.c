@@ -65,6 +65,9 @@
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
+#elif defined(WEB64_HOST_NATIVE)
+#define EMSCRIPTEN_KEEPALIVE
+#include "x64-native-host.h"
 #endif
 
 /* For the ugly hack below */
@@ -72,7 +75,7 @@
 # include "windows.h"
 #endif
 
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)
 EMSCRIPTEN_KEEPALIVE int vice_web_boot(void);
 EMSCRIPTEN_KEEPALIVE void vice_web_reset(int mode);
 EMSCRIPTEN_KEEPALIVE int vice_web_pause(void);
@@ -182,10 +185,13 @@ int main(int argc, char **argv)
 {
     /* printf("%s\n", __func__); */
 
+#ifdef WEB64_HOST_NATIVE
+    x64_native_prepare(&argc, argv);
+#endif
     return main_program(argc, argv);
 }
 
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) || defined(WEB64_HOST_NATIVE)
 static int vice_web_started = 0;
 static int vice_web_exit_code = 0;
 static int vice_web_snapshot_pending_flag = 0;
@@ -257,9 +263,22 @@ enum vice_web_monitor_opcode {
     VICE_WEB_BOOL = 23
 };
 
+#ifdef WEB64_HOST_NATIVE
+extern uint32_t mem_x64_debug_mapping(unsigned int address,unsigned int length);
+static int x64_debug_mapping_matches(int mapping,int address,int length)
+{
+    if(((uint32_t)mapping & 0x10000000u) && mapping>=0)
+        return (uint32_t)mapping==mem_x64_debug_mapping((unsigned int)address,(unsigned int)(length?length:1));
+    return mapping<0 || mapping==mem_get_current_bank_config();
+}
+#endif
 typedef struct vice_web_monitor_owner_s {
     int active, address, mapping, byte_length, program_length, next;
     int unavailable_count;
+#ifdef WEB64_HOST_NATIVE
+    uint64_t hits;
+    uint32_t hit_after, hit_every, log_only, suspended;
+#endif
     unsigned char bytes[VICE_WEB_MONITOR_GUARD_BYTES];
     int program[VICE_WEB_MONITOR_PROGRAM_LIMIT * 2];
 } vice_web_monitor_owner_t;
@@ -347,6 +366,14 @@ static void vice_web_run_program_trap(uint16_t addr, void *data)
     (void)addr;
     (void)data;
 
+#ifdef WEB64_HOST_NATIVE
+    if (!x64_native_program_may_apply()) {
+        vice_web_run_program_result_code = -7;
+        vice_web_run_program_pending_flag = 0;
+        x64_native_program_rejected();
+        return;
+    }
+#endif
     for (i = 0; i < vice_web_run_program_length; i++) {
         mem_inject((uint32_t)(vice_web_run_program_load_address + i), vice_web_run_program_bytes[i]);
     }
@@ -359,6 +386,9 @@ static void vice_web_run_program_trap(uint16_t addr, void *data)
 #endif
     vice_web_run_program_result_code = 0;
     vice_web_run_program_pending_flag = 0;
+#ifdef WEB64_HOST_NATIVE
+    x64_native_program_applied();
+#endif
 }
 
 EMSCRIPTEN_KEEPALIVE int vice_web_run_program(int load_address, int start_address, const unsigned char *bytes, int length)
@@ -709,7 +739,13 @@ EMSCRIPTEN_KEEPALIVE int vice_web_monitor_owner_set(int address, int memspace, i
     int slot;
     vice_web_monitor_owner_t *owner;
     if (address < 0 || address > 0xffff || memspace != e_comp_space ||
-        mapping < -1 || mapping > 31 || byte_length < 0 || byte_length > VICE_WEB_MONITOR_GUARD_BYTES ||
+        mapping < -1 ||
+#ifndef WEB64_HOST_NATIVE
+        mapping > 31 ||
+#else
+        (mapping > 31 && !((uint32_t)mapping & 0x10000000u)) ||
+#endif
+        byte_length < 0 || byte_length > VICE_WEB_MONITOR_GUARD_BYTES ||
         address + byte_length > 65536 || (byte_length && bytes == NULL) ||
         !vice_web_monitor_program_valid(program, program_length)) return -1;
     for (slot = 0; slot < VICE_WEB_MONITOR_OWNERS; slot++) {
@@ -723,6 +759,9 @@ EMSCRIPTEN_KEEPALIVE int vice_web_monitor_owner_set(int address, int memspace, i
     owner->byte_length = byte_length;
     owner->program_length = program_length;
     owner->unavailable_count = 0;
+#ifdef WEB64_HOST_NATIVE
+    owner->hits=0;owner->hit_after=1;owner->hit_every=1;owner->log_only=0;owner->suspended=0;
+#endif
     if (byte_length) memcpy(owner->bytes, bytes, (size_t)byte_length);
     if (program_length) memcpy(owner->program, program, (size_t)program_length * 2 * sizeof(int));
     owner->next = vice_web_monitor_owner_head[address];
@@ -772,6 +811,19 @@ EMSCRIPTEN_KEEPALIVE int vice_web_monitor_owner_unavailable_count(int owner_id)
     return vice_web_monitor_owners[owner_id - 1].unavailable_count;
 }
 
+#ifdef WEB64_HOST_NATIVE
+#define X64_DEBUG_LOG_CAP 256
+struct x64_debug_log { uint32_t owner,address,regs[5]; uint64_t hit; };
+static struct x64_debug_log x64_debug_logs[X64_DEBUG_LOG_CAP];
+static uint32_t x64_debug_log_count=0,x64_debug_log_dropped=0;
+static void x64_debug_log_hit(int owner_id,int address,uint64_t hit)
+{
+    struct x64_debug_log *entry;unsigned int i;
+    if(x64_debug_log_count==X64_DEBUG_LOG_CAP){if(x64_debug_log_dropped!=UINT32_MAX)x64_debug_log_dropped++;return;}
+    entry=&x64_debug_logs[x64_debug_log_count++];entry->owner=owner_id;entry->address=address;entry->hit=hit;
+    for(i=0;i<5;i++)entry->regs[i]=(uint32_t)vice_web_monitor_register_get((int)i+1);
+}
+#endif
 int vice_web_monitor_breakpoint_guard_match(int memspace, int address)
 {
     int i, j, matched = 0, native_match = 0, owner_id;
@@ -785,7 +837,13 @@ int vice_web_monitor_breakpoint_guard_match(int memspace, int address)
     else for (i = 0; i < VICE_WEB_MONITOR_GUARDS; i++) {
         const vice_web_monitor_guard_t *guard = &vice_web_monitor_guards[i];
         if (!guard->active || guard->address != address || guard->memspace != memspace ||
-            (guard->mapping >= 0 && guard->mapping != mem_get_current_bank_config())) {
+            (
+#ifdef WEB64_HOST_NATIVE
+             !x64_debug_mapping_matches(guard->mapping,address,guard->length)
+#else
+             guard->mapping >= 0 && guard->mapping != mem_get_current_bank_config()
+#endif
+            )) {
             continue;
         }
         for (j = 0; j < guard->length; j++) {
@@ -805,7 +863,13 @@ int vice_web_monitor_breakpoint_guard_match(int memspace, int address)
         vice_web_monitor_owner_t *owner = &vice_web_monitor_owners[owner_id - 1];
         const int next = owner->next;
         int result = 0;
-        if (owner->mapping < 0 || owner->mapping == mem_get_current_bank_config()) {
+        if (
+#ifdef WEB64_HOST_NATIVE
+            !owner->suspended && x64_debug_mapping_matches(owner->mapping,address,owner->byte_length)
+#else
+            owner->mapping < 0 || owner->mapping == mem_get_current_bank_config()
+#endif
+        ) {
             for (j = 0; j < owner->byte_length; j++) {
                 if (mem_peek_with_config(mem_get_current_bank_config(),
                     (uint16_t)(address + j), NULL) != owner->bytes[j]) break;
@@ -813,6 +877,11 @@ int vice_web_monitor_breakpoint_guard_match(int memspace, int address)
             if (j == owner->byte_length) result = vice_web_monitor_filter(owner);
         }
         if (result > 0) {
+#ifdef WEB64_HOST_NATIVE
+            if(owner->hits!=UINT64_MAX)owner->hits++;
+            if(owner->hits<owner->hit_after || (owner->hits-owner->hit_after)%owner->hit_every){owner_id=next;continue;}
+            if(owner->log_only){x64_debug_log_hit(owner_id,address,owner->hits);owner_id=next;continue;}
+#endif
             vice_web_monitor_matched_owner_ids[vice_web_monitor_matched_owner_count++] = owner_id;
             native_match = 1;
         } else if (result < 0 && owner->unavailable_count < 0x7fffffff) owner->unavailable_count++;
@@ -1510,6 +1579,7 @@ EMSCRIPTEN_KEEPALIVE int vice_web_warp_enabled(void)
     return warp_enabled;
 }
 
+#ifdef __EMSCRIPTEN__
 static void vice_web_boot_async(void *unused)
 {
     (void)unused;
@@ -1528,6 +1598,10 @@ EMSCRIPTEN_KEEPALIVE int vice_web_boot(void)
     emscripten_async_call(vice_web_boot_async, NULL, 0);
     return 0;
 }
+
+#else
+EMSCRIPTEN_KEEPALIVE int vice_web_boot(void) { return vice_web_started ? 0 : -1; }
+#endif
 
 EMSCRIPTEN_KEEPALIVE void vice_web_reset(int mode)
 {
@@ -1784,6 +1858,9 @@ static void vice_web_snapshot_trap(uint16_t addr, void *data)
             break;
     }
 
+#ifdef WEB64_HOST_NATIVE
+    x64_native_snapshot_applied(vice_web_snapshot_operation, vice_web_snapshot_result_code);
+#endif
     vice_web_snapshot_operation = 0;
     vice_web_snapshot_pending_flag = 0;
 }
@@ -1855,6 +1932,11 @@ EMSCRIPTEN_KEEPALIVE int vice_web_write_input(const char *type, const char *code
 }
 #endif
 
+
+#ifdef WEB64_HOST_NATIVE
+#include "x64-memory-file-impl.h"
+#include "x64-native-host-impl.h"
+#endif
 
 /** \brief  Exit handler
  */

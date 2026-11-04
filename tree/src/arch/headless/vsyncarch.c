@@ -41,6 +41,9 @@
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
 #endif
+#ifdef WEB64_HOST_NATIVE
+#include "x64-native-host.h"
+#endif
 
 #ifdef WINDOWS_COMPILE
 #   include "windows.h"
@@ -81,6 +84,8 @@ void vsyncarch_postsync(void)
     }
 #ifdef __EMSCRIPTEN__
     emscripten_sleep(0);
+#elif defined(WEB64_HOST_NATIVE)
+    x64_native_pump();
 #endif
 }
 

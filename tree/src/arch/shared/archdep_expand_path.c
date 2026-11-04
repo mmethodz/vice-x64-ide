@@ -40,6 +40,10 @@
 
 #include "archdep_expand_path.h"
 
+#ifdef WEB64_HOST_NATIVE
+#include "arch/headless/x64-memory-file.h"
+#endif
+
 
 /** \brief  Generate heap-allocated full pathname of \a orig_name
  *
@@ -57,6 +61,12 @@
  */
 int archdep_expand_path(char **return_path, const char *orig_name)
 {
+#ifdef WEB64_HOST_NATIVE
+    if (x64_memory_file_reserved(orig_name)) {
+        *return_path = x64_memory_file_name_valid(orig_name) ? lib_strdup(orig_name) : NULL;
+        return *return_path ? 0 : -1;
+    }
+#endif
 #ifdef UNIX_COMPILE
     if (*orig_name == '/') {
         *return_path = lib_strdup(orig_name);

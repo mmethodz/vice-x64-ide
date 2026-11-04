@@ -57,6 +57,11 @@
 
 #include "zfile.h"
 
+#ifdef WEB64_HOST_NATIVE
+#define X64_MEMORY_FILE_STDIO
+#include "arch/headless/x64-memory-file.h"
+#endif
+
 
 /* ------------------------------------------------------------------------- */
 
@@ -973,6 +978,10 @@ FILE *zfile_fopen(const char *name, const char *mode)
     enum compression_type type;
     int write_mode = 0;
 
+#ifdef WEB64_HOST_NATIVE
+    /* Resident media bypass compression, temporary files and host path lists. */
+    if (x64_memory_file_reserved(name)) return x64_memory_file_fopen(name, mode);
+#endif
     if (!zinit_done) {
         zinit();
     }
@@ -1097,6 +1106,10 @@ int zfile_fclose(FILE *stream)
 {
     zfile_t *ptr;
 
+#ifdef WEB64_HOST_NATIVE
+    if (x64_memory_file_stream(stream)) return x64_memory_file_fclose(stream);
+#endif
+
     if (!zinit_done) {
         errno = EBADF;
         return -1;
@@ -1127,6 +1140,10 @@ int zfile_close_action(const char *filename, zfile_action_t action,
     char *fullname = NULL;
     zfile_t *p = zfile_list;
 
+#ifdef WEB64_HOST_NATIVE
+    /* Resident streams never enter the compressed-file action list. */
+    if (x64_memory_file_reserved(filename)) return x64_memory_file_name_valid(filename) ? 0 : -1;
+#endif
     archdep_expand_path(&fullname, filename);
 
     while (p != NULL) {

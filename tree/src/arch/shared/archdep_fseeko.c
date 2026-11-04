@@ -32,6 +32,10 @@
 
 #include "archdep_fseeko.h"
 
+#ifdef WEB64_HOST_NATIVE
+#include "arch/headless/x64-memory-file.h"
+#endif
+
 
 /** \brief  Set position in stream
  *
@@ -45,6 +49,9 @@
  */
 int archdep_fseeko(FILE *stream, off_t offset, int whence)
 {
+#ifdef WEB64_HOST_NATIVE
+    if (x64_memory_file_stream(stream)) return x64_memory_file_seek64(stream, (int64_t)offset, whence);
+#endif
 #ifdef HAVE_FSEEKO
     return fseeko(stream, offset, whence);
 #else

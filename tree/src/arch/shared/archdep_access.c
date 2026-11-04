@@ -32,6 +32,10 @@
 
 #include "archdep_access.h"
 
+#ifdef WEB64_HOST_NATIVE
+#include "arch/headless/x64-memory-file.h"
+#endif
+
 
 /** \brief  Test access of \a pathname against \a mode
  *
@@ -43,6 +47,10 @@
 int archdep_access(const char *pathname, int mode)
 {
     int access_mode = 0;    /* this is the same as F_OK */
+
+#ifdef WEB64_HOST_NATIVE
+    if (x64_memory_file_reserved(pathname)) return x64_memory_file_access(pathname, mode);
+#endif
 
     if (mode & ARCHDEP_ACCESS_R_OK) {
         access_mode |= ARCHDEP_R_OK;

@@ -64,6 +64,11 @@
 
 #define CARTRIDGE_INCLUDE_PRIVATE_API
 #include "reu.h"
+
+#ifdef WEB64_HOST_NATIVE
+#define X64_MEMORY_FILE_STDIO
+#include "arch/headless/x64-memory-file.h"
+#endif
 #undef CARTRIDGE_INCLUDE_PRIVATE_API
 
 #if 0

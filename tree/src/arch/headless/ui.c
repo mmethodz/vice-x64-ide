@@ -35,6 +35,9 @@
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
 #endif
+#ifdef WEB64_HOST_NATIVE
+#include "x64-native-host.h"
+#endif
 
 #ifdef UNIX_COMPILE
 #include <unistd.h>
@@ -334,12 +337,23 @@ static void pause_trap(uint16_t addr, void *data)
     /* log_verbose(LOG_DEFAULT, "%s", __func__); */
     vsync_suspend_speed_eval();
     is_pause_trap_active = 1;
+#ifdef WEB64_HOST_NATIVE
+    x64_native_stop_entered();
+#endif
 #ifdef __EMSCRIPTEN__
     while (ui_pause_loop_iteration()) {
         emscripten_sleep(10);
     }
+#elif defined(WEB64_HOST_NATIVE)
+    while (ui_pause_loop_iteration()) {
+        x64_native_pump();
+        archdep_usleep(1000);
+    }
 #endif
     is_pause_trap_active = 0;
+#ifdef WEB64_HOST_NATIVE
+    x64_native_stop_left();
+#endif
 }
 
 #if defined(__EMSCRIPTEN__) || defined(VICE_WEB)

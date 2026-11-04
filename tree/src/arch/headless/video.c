@@ -38,6 +38,13 @@
 #include "resources.h"
 #include "videoarch.h"
 #include "video.h"
+#ifdef WEB64_HOST_NATIVE
+#include "x64-native-delivery.h"
+#include "maincpu.h"
+#include "viewport.h"
+static video_canvas_t *web_native_canvas;
+static uint64_t web_native_render_clock;
+#endif
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
@@ -265,6 +272,25 @@ VICE_WEB_KEEPALIVE int vice_web_frame_ready(void)
     return web_frame_ready;
 }
 
+#ifdef WEB64_HOST_NATIVE
+int x64_native_frame_geometry(uint32_t values[8], uint64_t *frame, uint64_t *clock)
+{
+    float aspect;
+    int standard, model;
+    if (!web_native_canvas || !web_native_canvas->geometry || !web_frame_width || !web_frame_height ||
+        resources_get_int("MachineVideoStandard", &standard) || resources_get_int("VICIIModel", &model)) return 0;
+    aspect = web_native_canvas->geometry->pixel_aspect_ratio;
+    if (!(aspect > 0.0f && aspect < 16.0f)) return 0;
+    values[0] = web_frame_width; values[1] = web_frame_height;
+    values[2] = web_frame_width * 4; values[3] = 1;
+    memcpy(values + 4, &aspect, sizeof(aspect));
+    values[5] = (uint32_t)standard; values[6] = (uint32_t)model;
+    values[7] = (web_frame_ready ? 1 : 0) | 2;
+    *frame = web_frame_number; *clock = web_native_render_clock;
+    return 1;
+}
+#endif
+
 
 /** \brief  Command line options related to generic video output
  */
@@ -366,6 +392,9 @@ video_canvas_t *video_canvas_create(video_canvas_t *canvas,
     /* printf("%s\n", __func__); */
 
     canvas->created = 1;
+#ifdef WEB64_HOST_NATIVE
+    web_native_canvas = canvas;
+#endif
 
     return canvas;
 }
@@ -376,6 +405,9 @@ video_canvas_t *video_canvas_create(video_canvas_t *canvas,
  */
 void video_canvas_destroy(struct video_canvas_s *canvas)
 {
+#ifdef WEB64_HOST_NATIVE
+    if (web_native_canvas == canvas) web_native_canvas = NULL;
+#endif
     /* printf("%s\n", __func__); */
 }
 
@@ -440,6 +472,11 @@ void video_canvas_refresh(struct video_canvas_s *canvas,
     web_frame_refresh_count++;
     web_frame_number++;
     web_frame_ready = 1;
+#ifdef WEB64_HOST_NATIVE
+    web_native_canvas = canvas;
+    web_native_render_clock = (uint64_t)maincpu_clk;
+    x64_native_delivery_frame(web_frame_pixels, web_frame_width, web_frame_height, web_frame_number);
+#endif
 }
 
 /** \brief Update canvas size to match the draw buffer size requested

@@ -37,11 +37,19 @@
 
 #include "archdep_file_size.h"
 
+#ifdef WEB64_HOST_NATIVE
+#include "arch/headless/x64-memory-file.h"
+#endif
+
 
 off_t archdep_file_size(FILE *stream)
 {
     off_t pos;
     off_t end;
+
+#ifdef WEB64_HOST_NATIVE
+    if (x64_memory_file_stream(stream)) return (off_t)x64_memory_file_size(stream);
+#endif
 
     pos = archdep_ftello(stream);
     if (pos < 0) {
